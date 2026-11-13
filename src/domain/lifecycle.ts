@@ -137,7 +137,6 @@ export async function sweepExpired(store: Store): Promise<number> {
       .rows[0];
     if (runtime?.mode === "restoring") return 0;
     await expireLegacy(c, store.now());
-    if (runtime?.mode !== "open") return 0;
     const candidates = (
       await c.query(
         "SELECT s.id,s.group_id FROM sources s JOIN groups g ON g.id=s.group_id WHERE g.channel_id=$1 AND s.state NOT IN ('revoked','expired') AND (s.expires_at<=$2 OR g.state IN ('deleting','deleted')) ORDER BY s.group_id,s.id LIMIT 50",
@@ -162,7 +161,7 @@ export async function sweepExpired(store: Store): Promise<number> {
   await store.transaction(async (c) => {
     const runtime = (await c.query("SELECT * FROM runtime_state FOR SHARE"))
       .rows[0];
-    if (runtime?.mode !== "open") return;
+    if (!runtime || runtime.mode === "restoring") return;
     const obsolete = (
       await c.query(
         `SELECT p.id,p.source_id,s.group_id,s.revision FROM publications p JOIN sources s ON s.id=p.source_id JOIN groups g ON g.id=s.group_id
@@ -201,7 +200,7 @@ export async function sweepExpired(store: Store): Promise<number> {
   await store.transaction(async (c) => {
     const runtime = (await c.query("SELECT mode FROM runtime_state FOR SHARE"))
       .rows[0];
-    if (runtime?.mode !== "open") return;
+    if (!runtime || runtime.mode === "restoring") return;
     await c.query(
       `UPDATE groups SET state='deleted',revision=revision+1 WHERE id IN (
       SELECT g.id FROM groups g WHERE g.channel_id=$1 AND g.state='deleting'
@@ -220,7 +219,7 @@ async function settleJobs(store: Store): Promise<void> {
   await store.transaction(async (c) => {
     const runtime = (await c.query("SELECT * FROM runtime_state FOR SHARE"))
       .rows[0];
-    if (runtime?.mode !== "open") return;
+    if (!runtime || runtime.mode === "restoring") return;
     const candidates = (
       await c.query(
         `SELECT j.id,j.source_id,s.group_id FROM jobs j JOIN sources s ON s.id=j.source_id JOIN groups g ON g.id=s.group_id

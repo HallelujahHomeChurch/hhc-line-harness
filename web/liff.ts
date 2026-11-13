@@ -33,6 +33,11 @@ const labels: Record<string, string> = {
   index_coverage_incomplete: "部分資料尚未完成文字整理",
   candidate_limit: "符合資料過多，請縮小查詢範圍",
 };
+function denied(error: unknown) {
+  return (
+    error instanceof Error && ["forbidden", "gone"].includes(error.message)
+  );
+}
 function message(error: unknown) {
   return error instanceof Error && error.message === "forbidden"
     ? "目前無權查看。請回原群組重新開啟，並確認仍是群組成員。"
@@ -183,7 +188,11 @@ function render(result: SearchResult) {
               },
               (e) => {
                 if (current === generation) {
-                  clear();
+                  if (denied(e)) clear();
+                  else {
+                    confirm.disabled = false;
+                    confirm.textContent = "重試確認結果";
+                  }
                   status.textContent = message(e);
                 }
               },
@@ -220,7 +229,11 @@ async function pickup() {
     refresh.hidden = value.state === "failed";
   } catch (e) {
     if (current === generation) {
-      clear();
+      if (denied(e)) clear();
+      else {
+        results.replaceChildren();
+        refresh.hidden = false;
+      }
       status.textContent = message(e);
     }
   }

@@ -198,3 +198,65 @@ for (const cause of ["unsend", "leave", "expired"] as const) {
     },
   );
 }
+
+test(
+  "closed admission continues expiry cleanup while restoring freezes all effects",
+  { skip: !databaseEnabled },
+  async (t) => {
+    const pool = await database(t);
+    const g = (
+      await pool.query(
+        "INSERT INTO groups(channel_id,line_group_id,state,active_from) VALUES('channel',$1,'active',$2) RETURNING id",
+        [group, now],
+      )
+    ).rows[0];
+    const s = (
+      await pool.query(
+        "INSERT INTO sources(group_id,message_id,kind,published_at,expires_at,state,asset_id,body,description) VALUES($1,'m','file',$2,$3,'ready','asset-id','private','private') RETURNING id",
+        [g.id, new Date(now.getTime() - 90 * 86400000), now],
+      )
+    ).rows[0];
+    await pool.query(
+      "INSERT INTO publications(source_id,collection_id,source_revision,group_revision,acl_revision,binding_generation,state,created_at) VALUES($1,$2,1,1,1,1,'active',$3)",
+      [s.id, collection, now],
+    );
+    const store = new Store(pool, undefined, "channel", () => now);
+    await sweepExpired(store);
+    assert.deepEqual(
+      (await pool.query("SELECT state,body,description FROM sources")).rows[0],
+      { state: "expired", body: null, description: null },
+    );
+    const { CleanupWorker } = await import("../src/worker/cleanup.ts");
+    let removed = 0;
+    const cleanup = new CleanupWorker(store, {
+      lookup: async () => undefined,
+      remove: async () => {
+        removed++;
+      },
+    });
+    const unpublish = new UnpublishWorker(store, {
+      lookup: async (p) => ({
+        itemId: "item-id",
+        collectionId: p.collection_id,
+        assetId: "asset-id",
+        revision: p.id,
+        state: "deleted",
+      }),
+      remove: async () => {
+        throw Error("already deleted");
+      },
+    });
+    await pool.query("UPDATE runtime_state SET mode='restoring'");
+    assert.equal(await cleanup.processOne(), false);
+    assert.equal(await unpublish.processOne(), false);
+    assert.equal(removed, 0);
+    await pool.query("UPDATE runtime_state SET mode='closed'");
+    assert.equal(await cleanup.processOne(), true);
+    assert.equal(await unpublish.processOne(), true);
+    assert.equal(removed, 1);
+    assert.ok(
+      (await pool.query("SELECT removed_at FROM publications")).rows[0]
+        .removed_at,
+    );
+  },
+);

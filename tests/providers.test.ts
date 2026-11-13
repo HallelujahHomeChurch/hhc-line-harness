@@ -291,3 +291,44 @@ test("Asset reader revocation sends If-Match and a recoverable operation without
   );
   await client.revokeReader(id, id, 7, "a".repeat(64), id);
 });
+
+test("publication names match owner-validated Unicode fixtures without altering source metadata", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { AssetPublicationClient } =
+    await import("../src/providers/asset-publication.ts");
+  const rows = JSON.parse(
+    await readFile("tests/fixtures/publication-names.json", "utf8"),
+  ) as { input: string; output: string }[];
+  for (const row of rows) {
+    const client = new AssetPublicationClient(
+      new ServiceClient("https://asset.example", {}, async (_url, init) => {
+        const body = JSON.parse(String(init?.body));
+        assert.equal(body.displayName, row.output);
+        return Response.json({
+          item: {
+            id: "item",
+            collectionId: "collection",
+            assetId: "asset",
+            sourceRevision: "operation",
+            publicationState: "staged",
+          },
+        });
+      }),
+    );
+    const source = {
+      id: "source",
+      asset_id: "asset",
+      file_name: row.input,
+    } as import("../src/worker/original.ts").Source;
+    await client.stage(
+      {
+        id: "operation",
+        collection_id: "collection",
+        binding_generation: "1",
+        acl_revision: "1",
+      } as import("../src/worker/publication.ts").Publication,
+      source,
+    );
+    assert.equal(source.file_name, row.input);
+  }
+});

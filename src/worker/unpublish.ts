@@ -14,7 +14,7 @@ export class UnpublishWorker {
     const task = await this.store.transaction(async (c) => {
       const runtime = (await c.query("SELECT * FROM runtime_state FOR SHARE"))
         .rows[0];
-      if (runtime?.mode !== "open") return;
+      if (!runtime || runtime.mode === "restoring") return;
       const candidate = (
         await c.query(
           `SELECT j.id,s.group_id,s.id AS source_id FROM jobs j JOIN sources s ON s.id=j.source_id JOIN groups g ON g.id=s.group_id WHERE j.kind='unpublish' AND j.runtime_generation=$1 AND g.channel_id=$2 AND (j.state IN ('queued','retry_wait') AND j.available_at<=$3 OR j.state='leased' AND j.lease_until<=$3) ORDER BY j.created_at LIMIT 1`,

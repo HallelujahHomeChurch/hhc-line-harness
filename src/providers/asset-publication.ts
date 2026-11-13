@@ -2,6 +2,17 @@ import { object } from "../domain/events.ts";
 import type { Source } from "../worker/original.ts";
 import type { Publication, PublicationRecord } from "../worker/publication.ts";
 import { ServiceClient, DependencyError } from "./http.ts";
+function displayName(name: string): string {
+  let result = "",
+    bytes = 0;
+  for (const char of name.replace(/[\/\\\p{Cc}]/gu, "").trim()) {
+    const size = Buffer.byteLength(char);
+    if (bytes + size > 255) break;
+    result += char;
+    bytes += size;
+  }
+  return result || "附件";
+}
 export class AssetPublicationClient {
   readonly http: ServiceClient;
   constructor(http: ServiceClient) {
@@ -54,10 +65,7 @@ export class AssetPublicationClient {
         {
           assetId: s.asset_id,
           remoteItemId: s.id,
-          displayName: (s.file_name ?? s.upload_file_name ?? "附件").slice(
-            0,
-            200,
-          ),
+          displayName: displayName(s.file_name ?? s.upload_file_name ?? "附件"),
           sourceRevision: p.id,
           bindingGeneration: Number(p.binding_generation),
           expectedAclRevision: Number(p.acl_revision),

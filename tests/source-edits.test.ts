@@ -72,9 +72,11 @@ test(
     assert.equal(s.description, "十二月同工排班");
     assert.equal(s.body, "original text");
     assert.equal(s.expires_at.getTime(), f.source.expires_at.getTime());
-    await assert.rejects(
-      f.edits.confirm(f.group, actor, p.id, p.token),
-      /expired/,
+    await f.edits.confirm(f.group, actor, p.id, p.token);
+    assert.equal(
+      (await f.pool.query("SELECT description_revision FROM sources")).rows[0]
+        .description_revision,
+      "2",
     );
   },
 );
@@ -197,6 +199,7 @@ test(
     );
     await assert.rejects(
       f.edits.confirm(f.group, other, deletion.id, deletion.token),
+      /synthetic/,
     );
     assert.equal(
       (await f.pool.query("SELECT state FROM sources")).rows[0].state,
@@ -214,9 +217,7 @@ test(
     assert.equal(admin.action, "line.source.delete");
     assert.equal(admin.actorType, "user");
     assert.equal(admin.actorId, "44444444-4444-4444-8444-444444444444");
-    await assert.rejects(
-      f.edits.confirm(f.group, other, deletion.id, deletion.token),
-    );
+    await f.edits.confirm(f.group, other, deletion.id, deletion.token);
     assert.equal(
       (await f.pool.query("SELECT count(*)::int n FROM audit_outbox")).rows[0]
         .n,
@@ -243,5 +244,42 @@ test(
     await dispatcher.processOne();
     await dispatcher.processOne();
     assert.equal(sent.length, 2);
+  },
+);
+
+test(
+  "completed source mutation receipts are same-actor, current-authority and generation scoped",
+  { skip: !databaseEnabled },
+  async (t) => {
+    const f = await fixture(t);
+    const op = await f.edits.preview(f.group, actor, f.source.id, {
+      kind: "delete",
+    });
+    await f.edits.confirm(f.group, actor, op.id, op.token);
+    await f.edits.confirm(f.group, actor, op.id, op.token);
+    assert.equal(
+      (
+        await f.pool.query(
+          "SELECT count(*)::int n FROM audit_outbox WHERE id=$1",
+          [op.id],
+        )
+      ).rows[0].n,
+      1,
+    );
+    await assert.rejects(f.edits.confirm(f.group, other, op.id, op.token));
+    await f.pool.query("UPDATE conversations SET generation=generation+1");
+    await assert.rejects(f.edits.confirm(f.group, actor, op.id, op.token));
+    const admin = await fixture(t);
+    const second = await admin.edits.preview(
+      admin.group,
+      other,
+      admin.source.id,
+      { kind: "delete" },
+    );
+    await admin.edits.confirm(admin.group, other, second.id, second.token);
+    admin.changeAdmin();
+    await assert.rejects(
+      admin.edits.confirm(admin.group, other, second.id, second.token),
+    );
   },
 );

@@ -164,7 +164,10 @@ export class SourceEdits {
         preview.source_id,
       ])
     ).rows[0];
-    const authority = await this.principal(actor, source?.author_id ?? null);
+    const authority =
+      preview.state === "completed" && preview.authority.kind === "author"
+        ? { kind: "author" }
+        : await this.principal(actor, source?.author_id ?? null);
     await this.store.transaction(async (c) => {
       const runtime = (await c.query("SELECT * FROM runtime_state FOR SHARE"))
         .rows[0];
@@ -196,17 +199,23 @@ export class SourceEdits {
         session.generation !== operation.conversation_generation ||
         session.last_interaction_at.getTime() + 30 * 60_000 <=
           this.store.now().getTime() ||
-        operation.state !== "preview" ||
         operation.expires_at <= this.store.now() ||
-        current.state !== "ready" ||
-        current.expires_at <= this.store.now() ||
-        current.revision !== operation.source_revision ||
-        current.description_revision !== operation.description_revision ||
         Object.keys(authority).length !==
           Object.keys(operation.authority).length ||
         Object.entries(authority).some(
           ([key, value]) => operation.authority[key] !== value,
         )
+      )
+        throw new Error("edit_expired");
+      // A completed receipt confirms the same effect; it never repeats the mutation.
+      if (operation.state === "completed") return;
+      if (
+        operation.state !== "preview" ||
+        !current ||
+        current.state !== "ready" ||
+        current.expires_at <= this.store.now() ||
+        current.revision !== operation.source_revision ||
+        current.description_revision !== operation.description_revision
       )
         throw new Error("edit_expired");
       if (operation.kind === "delete") {

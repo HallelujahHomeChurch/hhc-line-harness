@@ -194,3 +194,51 @@ test("reset serializes search and stale search completion cannot unlock it", asy
   await page.getByRole("button", { name: "查看查詢結果", exact: true }).click();
   await expect(page.locator("article")).toHaveCount(1);
 });
+
+test("transient pickup retries the same job without starting another search", async ({
+  page,
+}) => {
+  let searches = 0,
+    reads = 0;
+  page.on("request", (r) => {
+    if (r.url().endsWith("/search")) searches++;
+  });
+  await page.route("**/groups/*/results/*", async (route) => {
+    reads++;
+    if (reads === 1)
+      return route.fulfill({
+        status: 503,
+        json: { error: "search_unavailable" },
+      });
+    return route.continue();
+  });
+  await page.getByLabel("想找什麼？").fill("排班");
+  await page.getByRole("button", { name: "搜尋", exact: true }).click();
+  await page.getByRole("button", { name: "查看查詢結果", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("稍後");
+  await page.getByRole("button", { name: "查看查詢結果", exact: true }).click();
+  await expect(page.locator("article")).toHaveCount(1);
+  expect(searches).toBe(1);
+});
+test("unknown mutation preserves one confirmation operation for result recovery", async ({
+  page,
+}) => {
+  proposal = true;
+  const requests: string[] = [];
+  await page.route("**/edits/*/confirm", async (route) => {
+    requests.push(route.request().url() + route.request().postData());
+    return route.fulfill({
+      status: requests.length === 1 ? 503 : 200,
+      json: { ok: true },
+    });
+  });
+  await page.getByLabel("想找什麼？").fill("刪除");
+  await page.getByRole("button", { name: "搜尋", exact: true }).click();
+  await page.getByRole("button", { name: "查看查詢結果", exact: true }).click();
+  await page.getByRole("button", { name: "預覽變更草稿" }).click();
+  await page.getByRole("button", { name: "確認執行這項變更" }).click();
+  await page.getByRole("button", { name: "重試確認結果" }).click();
+  await expect(page.getByRole("status")).toContainText("變更已完成");
+  expect(requests).toHaveLength(2);
+  expect(requests[0]).toBe(requests[1]);
+});

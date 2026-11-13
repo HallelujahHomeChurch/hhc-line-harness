@@ -20,6 +20,22 @@ A fresh full run also exposed a date-sensitive test fixture: Audit used a fixed 
 
 Post-fix local verification: Harness 179 tests / zero skips, four compiled extraction tests, four offline Chromium tests, types/format/build/boundaries/provenance and production dependency audit pass. Admin Console 141 files / 1484 tests, lint and build pass; one existing vite.config triple-slash warning remains. Owning unchanged checks are recorded in the earlier local acceptance report. Current remote CI, independent round 2 and runtime acceptance are separate gates.
 
+## Round 2
+
+Three fresh Codex consultants reviewed the eight actual Draft PRs and their exact local heads, independently and read-only, across UI/UX, workflow and service contracts. They reported five actionable findings:
+
+| Finding | Resolution | Regression evidence |
+| --- | --- | --- |
+| P2 transient result pickup discards the retry handle | Keep the same job and refresh action after network/503 failure; deny/expired responses still clear the result | Offline browser retries one job without another search/model request |
+| P2 unknown source-edit confirmation cannot recover its outcome | Retain the same preview/token in the UI; the server returns a completed receipt under the same actor, membership, authority and generation fences without repeating effects | Browser same-request retry; PostgreSQL author/Admin receipts, audit uniqueness, authority/reset rejection |
+| P3 selecting a new collection displays the previous audience | Hide the old audience and show a pending-save explanation until that destination is authoritative | Admin Console new-collection audience test |
+| P2 closed admission stalls expiry and remote deletion | Continue expiry, cleanup and unpublish in closed mode; restoring still freezes maintenance and ordinary processing remains stopped | PostgreSQL closed expiry and worker cleanup; restoring no-effect check |
+| P2 accepted Unicode filenames violate Asset item display-name bounds | Normalize only the publication display name to the owner's 255-byte UTF-8 limit, removing forbidden separators/control characters; retain original metadata | Five byte-identical producer/owner fixtures checked by the actual Go validator |
+
+PR wording now accurately states that Account provides instructions to return to LINE setup rather than claiming an automatic redirect. Remote CI additionally exposed two integration omissions: Asset's reviewed additive CHECK-domain expansion needed the existing immutable-migration policy entry, and Gateway content downloads needed the stream capacity class. The exact migration hash and mutation-rejection checks retain the destructive-DDL guard; the generated Gateway route now uses its existing stream budget. No gate is bypassed.
+
+The initial local rerun retained failures: the new checkout's external dependency symlink was incompatible with the extraction child's filesystem boundary, and an unrelated Admin campaign test timed out under concurrent load. Dependencies were copied into this checkout without widening extraction permissions; subsequent validation is recorded below. Neither initial failure is counted as passing. Harness rerun: 182 tests / zero skips, four compiled extraction tests, six offline Chromium tests, types/format/build/boundaries and dependency audit pass; immutable plan verification and cross-service fixtures pass. Admin full-suite and hosted checks remain separately tracked.
+
 ## Restore and retirement boundary
 
 Closed admission is not an all-writer stop. Before restoring, an independently durable lifecycle owner must receive denials while the database and serving writers are stopped, and reconcile current denials into the external signed policy journal. Never switch the webhook to an isolated restoring database or assume LINE redelivery is durable custody. Missing custody keeps admission closed. Do not archive the legacy owner while it is still needed for retained sources, old routes or rollback.
