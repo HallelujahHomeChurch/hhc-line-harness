@@ -38,7 +38,7 @@ pnpm audit --prod
 - [首批歷史紀錄](docs/batch-01.md)
 - [保留的五份原始計畫](docs/plans/)
 
-原始計畫維持 byte-identical。獨立 private repository、[應用 PR #1](https://github.com/HallelujahHomeChurch/hhc-line-harness/pull/1) 與 PR CI 已建立；跨 repository 的修正與獨立顧問審查見 [審查紀錄](docs/review-rounds-20261113.md)。PR／CI 不代表 merge、release 或真實 LINE／Azure Queue／手機／付費模型驗收。合併與發布由後續協調 session 依依賴順序執行；舊 Bot 封存須等切換驗收、責任移交及 rollback 窗口結束。
+原始計畫維持 byte-identical。獨立 public repository（依 2026-11-13 決定）、[應用 PR #1](https://github.com/HallelujahHomeChurch/hhc-line-harness/pull/1) 與 PR CI 已建立；跨 repository 的修正與獨立顧問審查見 [審查紀錄](docs/review-rounds-20261113.md)。PR／CI 不代表 merge、release 或真實 LINE／Azure Queue／手機／付費模型驗收。合併與發布由後續協調 session 依依賴順序執行；舊 Bot 封存須等切換驗收、責任移交及 rollback 窗口結束。
 
 搜尋、擷取、群組領取、LIFF 與對話重設契約見 [搜尋與對話](docs/search-conversations.md)。`LINE_LIFF_ID` 預設未設定；真實 LINE Console 與部署設定仍需外部驗收授權。手機頁本機驗證使用 `pnpm test:web`，測試會攔截所有外部連線。
 

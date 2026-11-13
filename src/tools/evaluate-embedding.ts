@@ -32,15 +32,17 @@ async function main() {
     statement_timeout: 5000,
     query_timeout: 5000,
   });
+  const provider = createEmbeddingProvider(config);
   try {
     const index = new EmbeddingIndex(
       new Store(pool, undefined, channel),
-      createEmbeddingProvider(config),
+      provider,
     );
     await index.prepare();
     const report = await index.evaluate(cases);
     process.stdout.write(JSON.stringify(report) + "\n");
   } finally {
+    await provider.close();
     await pool.end();
   }
 }

@@ -4,9 +4,11 @@ import {
   getBearerTokenProvider,
 } from "@azure/identity";
 import type { EmbeddingProvider } from "../search/embeddings.ts";
+import { createOpenAiTransport, readOpenAiProxyUrl } from "./openai-proxy.ts";
 export interface EmbeddingConfig extends Omit<EmbeddingProvider, "embed"> {
   responseModel: string;
   openaiKey?: string;
+  openaiProxyUrl?: string;
   azureEndpoint?: string;
   identityClientId?: string;
 }
@@ -34,7 +36,10 @@ export function loadEmbeddingConfig(
         required("EMBEDDING_INPUT_MICROS_PER_MILLION"),
       ),
       ...(provider === "openai"
-        ? { openaiKey: required("OPENAI_API_KEY") }
+        ? {
+            openaiKey: required("OPENAI_API_KEY"),
+            openaiProxyUrl: readOpenAiProxyUrl(env.OPENAI_PROXY_URL),
+          }
         : {
             azureEndpoint: required("AZURE_OPENAI_ENDPOINT"),
             identityClientId: required("AZURE_CLIENT_ID"),
@@ -59,6 +64,7 @@ function validate(config: EmbeddingConfig) {
   )
     throw new Error("invalid_embedding_config");
   if (config.provider === "openai") {
+    readOpenAiProxyUrl(config.openaiProxyUrl);
     if (!config.openaiKey) throw new Error("invalid_embedding_config");
   } else if (config.provider === "azure") {
     const url = new URL(config.azureEndpoint ?? "");
@@ -82,8 +88,12 @@ export function createEmbeddingProvider(
   config: EmbeddingConfig,
   fetcher: typeof fetch = fetch,
   azureToken?: () => Promise<string>,
-): EmbeddingProvider {
+): EmbeddingProvider & { close(): Promise<void> } {
   validate(config);
+  const transport = createOpenAiTransport(
+    config.provider === "openai" ? config.openaiProxyUrl : undefined,
+    fetcher,
+  );
   const client = new OpenAI({
     apiKey:
       config.provider === "openai"
@@ -97,9 +107,10 @@ export function createEmbeddingProvider(
     maxRetries: 0,
     timeout: 40000,
     logLevel: "off",
-    fetch: fetcher,
+    fetch: transport.fetch,
   });
   return {
+    close: transport.close,
     version: config.version,
     provider: config.provider,
     model: config.model,

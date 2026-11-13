@@ -16,6 +16,12 @@ Direct Admin natural-language requests have separate encrypted sessions/jobs, cu
 
 Task 9 local implementation includes conversation follow-ups and the pinned embedding/index pipeline described below. Local evidence includes real SDK loops with stub models, intercepted official Responses transports, concurrent PostgreSQL budget tests, provider fallback after a completed tool, source revocation, Admin separation, reset fencing and browser preview/confirmation. No paid model, real LINE, Azure identity, deployment or device acceptance has occurred.
 
+## Dedicated OpenAI network path
+
+`OPENAI_PROXY_URL` optionally selects the retained private bastion-to-office CONNECT relay for OpenAI Responses and OpenAI embeddings. It accepts only an HTTP(S) origin without URL credentials, path, query or fragment. Connections permit only `https://api.openai.com:443`, retain TLS verification, reject redirects, disable SDK retries and never retry directly when the configured relay fails. Each client owns a bounded dispatcher and destroys it on shutdown. Azure fallback and Azure embeddings keep their own direct transport; LINE, Account, Asset, queue clients and process-wide proxy settings are unchanged. No Codex subscription credentials or desktop configuration are used.
+
+Before enabling models, verify the complete deployed API/embedding-worker → bastion → office path, destination/source restrictions, and office service recovery. A running relay or a local CONNECT fixture does not establish live availability. Keep existing helper network resources until successor acceptance; the transport creates no relay service or network rule.
+
 ## Conversation and semantic index follow-through
 
 Group follow-ups retain only up to five source IDs as an encrypted checkpoint, then reload current evidence with fresh group membership and revisions. Admin follow-ups retain a reference to their last metadata result, recheck its principal and reload current management metadata. Reset and the 30-minute idle boundary clear these references. Query jobs use a durable per-owner sequence rather than timestamp ties. Withdrawal of a question cancels its queued request; withdrawal of evidence cancels dependent runs and deletes their encrypted model/tool recovery records.

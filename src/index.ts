@@ -28,6 +28,7 @@ async function main() {
     try {
       await runtime.initialize();
     } catch {
+      await runtime.close();
       await pool.end();
       throw new Error("runtime_initialization_failed");
     }
@@ -118,6 +119,7 @@ async function main() {
   app.addHook("onClose", async () => {
     for (const timer of timers) clearInterval(timer);
     await Promise.allSettled([...running]);
+    await runtime?.close();
     await pool.end();
   });
   const shutdown = () => {

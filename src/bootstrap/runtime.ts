@@ -91,20 +91,17 @@ export function createRuntime(
   const sourceEdits = new SourceEdits(store, search, (actor) =>
     account.authority(actor),
   );
-  const embeddings = config.embeddings
-    ? new EmbeddingIndex(
-        store,
-        createEmbeddingProvider(config.embeddings, fetcher),
-      )
+  const embeddingProvider = config.embeddings
+    ? createEmbeddingProvider(config.embeddings, fetcher)
     : undefined;
-  const agent = config.agent
-    ? new HarnessAgent(
-        store,
-        search,
-        sourceEdits,
-        createModelProviders(config.agent, fetcher),
-        embeddings,
-      )
+  const models = config.agent
+    ? createModelProviders(config.agent, fetcher)
+    : undefined;
+  const embeddings = embeddingProvider
+    ? new EmbeddingIndex(store, embeddingProvider)
+    : undefined;
+  const agent = models
+    ? new HarnessAgent(store, search, sourceEdits, models, embeddings)
     : undefined;
   const conversations = new Conversations(store, search, agent);
   const adminQueries = agent
@@ -142,6 +139,9 @@ export function createRuntime(
     ? new AuditDispatcher(store, (event) => auditClient.append(event))
     : undefined;
   return {
+    close: async () => {
+      await Promise.all([models?.close(), embeddingProvider?.close()]);
+    },
     audit,
     management: {
       service: management,

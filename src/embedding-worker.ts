@@ -28,6 +28,7 @@ async function main() {
   process.once("SIGINT", () => {
     stopped = true;
   });
+  const provider = createEmbeddingProvider(config);
   try {
     await requireRuntimeGeneration(
       pool,
@@ -35,13 +36,14 @@ async function main() {
     );
     const index = new EmbeddingIndex(
       new Store(pool, undefined, channel),
-      createEmbeddingProvider(config),
+      provider,
     );
     await index.prepare();
     const deadline = Date.now() + 10 * 60000;
     for (let n = 0; n < 100 && !stopped && Date.now() < deadline; n++)
       if (!(await index.processOne())) break;
   } finally {
+    await provider.close();
     await pool.end();
   }
 }

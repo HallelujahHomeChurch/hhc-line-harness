@@ -7,6 +7,10 @@ import {
 import { z } from "zod";
 import type { Price } from "./budgets.ts";
 import type { ModelProviders } from "./model.ts";
+import {
+  createOpenAiTransport,
+  readOpenAiProxyUrl,
+} from "../providers/openai-proxy.ts";
 setTracingDisabled(true);
 const tariff = z
   .object({
@@ -20,6 +24,7 @@ const tariff = z
 export interface AgentConfig {
   openaiKey: string;
   openaiModel: string;
+  openaiProxyUrl?: string;
   azureEndpoint: string;
   azureDeployment: string;
   identityClientId: string;
@@ -41,6 +46,7 @@ export function loadAgentConfig(
     const config = {
       openaiKey: value("OPENAI_API_KEY"),
       openaiModel: value("OPENAI_MODEL"),
+      openaiProxyUrl: readOpenAiProxyUrl(env.OPENAI_PROXY_URL),
       azureEndpoint: value("AZURE_OPENAI_ENDPOINT"),
       azureDeployment: value("AZURE_OPENAI_DEPLOYMENT"),
       identityClientId: value("AZURE_CLIENT_ID"),
@@ -54,6 +60,7 @@ export function loadAgentConfig(
   }
 }
 function validate(config: AgentConfig) {
+  readOpenAiProxyUrl(config.openaiProxyUrl);
   const url = new URL(config.azureEndpoint);
   if (
     url.protocol !== "https:" ||
@@ -78,7 +85,7 @@ export function createModelProviders(
   config: AgentConfig,
   fetcher: typeof fetch = fetch,
   azureToken?: () => Promise<string>,
-): ModelProviders {
+): ModelProviders & { close(): Promise<void> } {
   validate(config);
   const token =
     azureToken ??
@@ -92,13 +99,19 @@ export function createModelProviders(
     fetch: fetcher,
     logLevel: "off" as const,
   };
-  const primary = new OpenAI({ ...common, apiKey: config.openaiKey });
+  const transport = createOpenAiTransport(config.openaiProxyUrl, fetcher);
+  const primary = new OpenAI({
+    ...common,
+    apiKey: config.openaiKey,
+    fetch: transport.fetch,
+  });
   const secondary = new OpenAI({
     ...common,
     baseURL: config.azureEndpoint,
     apiKey: token,
   });
   return {
+    close: transport.close,
     openai: {
       model: new OpenAIResponsesModel(primary, config.openaiModel),
       name: config.openaiModel,
