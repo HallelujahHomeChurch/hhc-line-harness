@@ -260,3 +260,63 @@ test(
     );
   },
 );
+
+test(
+  "unpublish scheduling advances beyond fifty unresolved sources and repairs terminal work",
+  { skip: !databaseEnabled },
+  async (t) => {
+    const pool = await database(t);
+    await pool.query("UPDATE runtime_state SET mode='open'");
+    const g = (
+      await pool.query(
+        "INSERT INTO groups(channel_id,line_group_id,state,active_from) VALUES('channel',$1,'active',$2) RETURNING id",
+        [group, now],
+      )
+    ).rows[0];
+    await pool.query(
+      "INSERT INTO sources(group_id,message_id,kind,published_at,expires_at,state,asset_id) SELECT $1,i::text,'file',$2,$3,'ready',md5(i::text) FROM generate_series(1,51) i",
+      [g.id, now, new Date(now.getTime() + 90 * 86400000)],
+    );
+    await pool.query(
+      "INSERT INTO publications(source_id,collection_id,source_revision,group_revision,acl_revision,binding_generation,state,created_at) SELECT id,$1,revision,1,1,1,'revoked',$2 FROM sources",
+      [collection, now],
+    );
+    const store = new Store(pool, undefined, "channel", () => now);
+    await sweepExpired(store);
+    const worker = new UnpublishWorker(store, {
+      lookup: async () => undefined,
+      remove: async () => {
+        throw Error("no known remote item");
+      },
+    });
+    for (let i = 0; i < 50; i++) assert.equal(await worker.processOne(), true);
+    assert.equal(
+      (
+        await pool.query(
+          "SELECT count(*)::int n FROM jobs WHERE kind='unpublish' AND state='retry_wait'",
+        )
+      ).rows[0].n,
+      50,
+    );
+    await sweepExpired(store);
+    assert.equal(
+      (
+        await pool.query(
+          "SELECT count(*)::int n FROM jobs WHERE kind='unpublish'",
+        )
+      ).rows[0].n,
+      51,
+    );
+    const j = (
+      await pool.query(
+        "UPDATE jobs SET state='failed' WHERE id=(SELECT id FROM jobs WHERE state='retry_wait' LIMIT 1) RETURNING id",
+      )
+    ).rows[0];
+    await sweepExpired(store);
+    assert.equal(
+      (await pool.query("SELECT state FROM jobs WHERE id=$1", [j.id])).rows[0]
+        .state,
+      "queued",
+    );
+  },
+);

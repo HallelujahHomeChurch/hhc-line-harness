@@ -165,8 +165,9 @@ export async function sweepExpired(store: Store): Promise<number> {
     const obsolete = (
       await c.query(
         `SELECT p.id,p.source_id,s.group_id,s.revision FROM publications p JOIN sources s ON s.id=p.source_id JOIN groups g ON g.id=s.group_id
-      WHERE g.channel_id=$1 AND p.removed_at IS NULL AND (p.state='revoked' OR g.collection_id IS DISTINCT FROM p.collection_id OR g.binding_generation IS DISTINCT FROM p.binding_generation) ORDER BY s.group_id,p.id LIMIT 50`,
-        [store.channelId],
+      WHERE g.channel_id=$1 AND p.removed_at IS NULL AND (p.state='revoked' OR g.collection_id IS DISTINCT FROM p.collection_id OR g.binding_generation IS DISTINCT FROM p.binding_generation)
+      AND (p.state<>'revoked' OR NOT EXISTS(SELECT 1 FROM jobs j WHERE j.source_id=s.id AND j.kind='unpublish' AND j.runtime_generation=$2 AND j.state IN ('queued','retry_wait','leased'))) ORDER BY s.group_id,p.id LIMIT 50`,
+        [store.channelId, runtime.generation],
       )
     ).rows;
     for (const p of obsolete) {
@@ -181,7 +182,7 @@ export async function sweepExpired(store: Store): Promise<number> {
       if (!changed.rowCount) continue;
       const job = (
         await c.query(
-          "INSERT INTO jobs(source_id,kind,runtime_generation,source_revision,created_at,available_at) VALUES($1,'unpublish',$2,$3,$4,$4) ON CONFLICT(source_id,kind) DO UPDATE SET state='queued',runtime_generation=EXCLUDED.runtime_generation,source_revision=EXCLUDED.source_revision,available_at=EXCLUDED.available_at,lease_until=NULL,fence=jobs.fence+1 WHERE jobs.state IN ('held','cancelled','completed','failed') RETURNING id",
+          "INSERT INTO jobs(source_id,kind,runtime_generation,source_revision,created_at,available_at) VALUES($1,'unpublish',$2,$3,$4,$4) ON CONFLICT(source_id,kind) DO UPDATE SET state='queued',runtime_generation=EXCLUDED.runtime_generation,source_revision=EXCLUDED.source_revision,available_at=EXCLUDED.available_at,lease_until=NULL,fence=jobs.fence+1 WHERE jobs.state IN ('held','cancelled','completed','failed') OR jobs.runtime_generation<>EXCLUDED.runtime_generation RETURNING id",
           [p.source_id, runtime.generation, p.revision, store.now()],
         )
       ).rows[0];

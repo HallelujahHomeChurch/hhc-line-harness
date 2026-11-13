@@ -58,6 +58,16 @@ Three fresh read-only consultants reviewed all eight PR heads listed in the roun
 
 The eight round-4 published heads all passed their applicable hosted checks before these newly identified fixes. This is historical evidence, not validation of the subsequent heads. Harness post-fix local validation passes 186 PostgreSQL/domain tests, four compiled extraction tests, eight browser cases, types/format/build/boundaries and dependency audit. Fresh three-consultant review and hosted checks remain required for the updated heads.
 
+## Round 5
+
+Three fresh read-only consultants reviewed the round-5 heads. The cross-service seat found no new confirmed mismatch. UI identified two remaining receipt-loss paths; workflow identified starvation in bounded unpublish scheduling.
+
+- A submitted, unresolved confirmation now remains account-scoped across navigation and browser refresh. Cancel/new preview controls cannot discard or overwrite it; recovery still sends only the same operation/token under fresh server authorization. Unsubmitted approvals remain transient. This supersedes round 4's navigation-discard behavior.
+- Collection creation persists its account-scoped operation ID and immutable name before requesting Asset. Unknown outcomes restore a “check creation result” action after navigation/refresh. Completion or definite validation rejection clears that receipt; it never silently creates a new operation on retry.
+- Unpublish scheduling excludes already-revoked publications whose source has a live current-generation cleanup job. New obsolete publications and interrupted/terminal or obsolete-generation work remain repairable. The 51-source regression proves the first 50 unresolved remote outcomes cannot starve the next source, and terminal work is still requeued.
+
+All three regressions failed before their fixes. Harness post-fix full local verification passes 187 tests / zero skips, four compiled extraction tests, eight Chromium cases, types/format/build/boundaries and dependency audit. Admin's focused recovery/management suite passes 13 cases; full-suite/current-head hosted receipts remain tracked separately. Fresh independent review is still required after these fixes.
+
 ## Restore and retirement boundary
 
 Closed admission is not an all-writer stop. Before restoring, an independently durable lifecycle owner must receive denials while the database and serving writers are stopped, and reconcile current denials into the external signed policy journal. Never switch the webhook to an isolated restoring database or assume LINE redelivery is durable custody. Missing custody keeps admission closed. Do not archive the legacy owner while it is still needed for retained sources, old routes or rollback.
