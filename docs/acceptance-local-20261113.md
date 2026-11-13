@@ -1,6 +1,8 @@
 # Local implementation acceptance — 2026-11-13
 
-Status: Tasks 1–13 implemented and verified locally, including the fresh independent review and all five findings fixed. **Not production accepted, not ready for webhook cutover.** Task 14 remains pending external authority and actual environment/owner decisions. No PR/push/merge/deployment, real LINE/provider/cloud trial, credential revocation or legacy archival occurred.
+Historical snapshot: this document records the local implementation before the PR/repeated-review phase. Current repository/PR and review status are in [README](../README.md) and [review rounds](review-rounds-20261113.md). Counts and no-PR statements below describe that earlier snapshot.
+
+Status at capture: Tasks 1–13 implemented and verified locally, including the fresh independent review and all five findings fixed. **Not production accepted, not ready for webhook cutover.** Task 14 remains pending external authority and actual environment/owner decisions. No PR/push/merge/deployment, real LINE/provider/cloud trial, credential revocation or legacy archival occurred.
 
 ## Verification levels
 

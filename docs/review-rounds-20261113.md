@@ -91,3 +91,12 @@ Three fresh read-only consultants reviewed the round-7 heads. The service and wo
 - Admin collection-creation recovery is an independent panel, so a missing/expired setup link, active setup or disabled sharing no longer hides the existing operation. It retains the original ID/name and reports success; it does not start another collection operation.
 
 Harness full local verification passes 190 tests / zero skips, four compiled extraction tests, eleven Chromium cases and all source/build/boundary/dependency checks. Admin's fifteen focused cases and lint/build pass; isolated full-suite and current-head CI receipts remain separate. Decoded LIFF identity is used only for local storage scoping, consistent with the [official LIFF API contract](https://developers.line.biz/en/reference/liff/#get-decoded-id-token); it is never submitted as authority to the server. Another fresh three-person review is required for the updated heads.
+
+## Round 8
+
+Three fresh read-only consultants reviewed the round-8 heads. The service seat found no new confirmed defect. Workflow identified stale README delivery status; UI identified a storage-failure branch that could still send Admin mutations without a durable receipt.
+
+- Both Admin collection creation and confirmation now synchronously save the receipt before sending the request. Storage refusal reports that no change was sent, leaves the unsubmitted action available, and sends zero mutations. Confirmation no longer relies on a later React effect to persist its operation. Two exception-injection regressions fail before the fix and pass afterward, including successful retry once storage is available.
+- README now links the independent private repository PR and repeated-review record while distinguishing merge/release/runtime acceptance. The original local acceptance report is explicitly marked as a historical pre-PR snapshot; the five retained original plan files remain unchanged.
+
+Admin's seventeen focused cases and lint/build pass. The preceding full revision passes all 141 files / 1494 tests when run alone with one worker; the prior concurrent contention failure remains retained. Final current-revision full-suite/hosted checks and a fresh three-consultant review are still required.
