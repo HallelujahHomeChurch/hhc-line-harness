@@ -1,0 +1,13 @@
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s == "hhc-line-harness"
+| where TimeGenerated > ago(5m)
+| extend record = parse_json(Log_s)
+| where Log_s == "line_harness_intake_persist_failed"
+    or (record.event == "line_harness_health" and
+        (record.auditConfigured == false or tolong(record.auditDeadLetter) > 0
+         or todouble(record.oldestAuditSeconds) > 300
+         or todouble(record.oldestDownloadSeconds) > 300
+         or todouble(record.oldestIndexSeconds) > 300
+         or tolong(record.deletionBacklog) > 0 or tolong(record.replyUnknown) > 0
+         or tolong(record.knownMissing) > 0))
+| project TimeGenerated

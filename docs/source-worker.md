@@ -1,0 +1,29 @@
+# Source worker and access contract
+
+Task 5 implementation uses real local PostgreSQL and synthetic external providers. It does not admit real traffic. API and worker entrypoints require explicit configuration; runtime state starts closed and restores must remain closed until the independent recovery gate is implemented and accepted.
+
+Receipt/source/job/wake are atomic. Original events have a 24-hour maximum age plus runtime floor and current activation interval; lifecycle denial can still process older signed unsends. Hashed source tombstones last 120 days. Source identity/deadline are immutable in PostgreSQL. Jobs use a 60-second fencing lease, at most five attempts and retry delays of 2/10/60/300 seconds. Initial attachment download has a 15-minute deadline from durable receipt. Pause/leave holds accepted work; resume does not extend deadlines or backfill the disabled interval. These are initial limits, not measured real LINE throughput guarantees; Task 11 owns load/cleanup acceptance.
+
+Original download streams to a random private temporary file, hashes bytes, enforces per-MIME size limits and removes the file in `finally`. Asset performs independent byte/MIME/hash verification. File identity is persisted before external creation. The same source ID is the creation idempotency key. Owner-only `GET /priv/assets/upload-sessions/{operationID}` resolves unknown creation without another create or signed target. A ready original is reconciled before downloading again. Late Asset IDs after revocation remain durable cleanup targets. Upload targets must use an explicitly allowlisted HTTPS origin, PUT and bounded known headers; no workload credential is forwarded to storage.
+
+Sharing uses the destination/ACL/binding captured when the event was accepted. A persistent publication intent precedes staged creation; exact item metadata is saved and approved before activation. Unknown stage/activate outcomes use owner/operation metadata recovery. Original, indexing and publication have separate jobs; publication retry never reruns original download. Changing destination removes only its old publication, preserving the group original. Revoked sources are denied immediately; background deletion does not decide read permission. Unknown external operations stay pending rather than being assumed absent. Metadata recognizes Go zero timestamps and terminal deleted items correctly.
+
+`POST /priv/source/check` accepts only the dedicated Asset service token/caller. A single database snapshot resolves runtime, source, group and exact publication/ACL/binding approval; it never calls Asset recursively. Original, collection, control, stage, activate and published modes fail closed. The response distinguishes active, paused, revoked and expired; dependency failures are 503.
+
+`GET`/`HEAD /api/line/sources/{id}/content` requires an authenticated LINE ID token for the configured LINE Login channel and current membership in the source group. It does not require a Website Account or accept its Admin role as content authority. Source policy is rechecked around the Asset request; GET/HEAD/Range/conditional responses preserve bounded transport metadata, no-store and no Blob SAS. The browser/LIFF entry and deployment registration remain Task 6/external gates. Identity verification follows [LINE's ID-token endpoint](https://developers.line.biz/en/reference/line-login/#verify-id-token).
+
+Wake reservations are durable and fenced. Send ambiguity can repeat only the opaque job ID; PG job state deduplicates execution. API dispatches ready/retry/expired-lease work, including a 60-second recovery wake. The official Azure Queue SDK uses explicit managed identity with no CLI credential fallback; it neither creates queues nor changes infrastructure. Worker execution is bounded and consumes queue messages through visibility and acknowledgement. Actual scaler/cold-start acceptance and poison-message operations remain later gates. See [Azure Queue SDK contract](https://learn.microsoft.com/en-us/javascript/api/overview/azure/storage-queue-readme?view=azure-node-latest).
+
+Local verification includes durable receipt rollback, concurrent leases, unsend-before-original, expiry/restore denial, unknown completion without reupload, unknown staged/activation recovery, protected member access, source callback credentials, wake ambiguity and a full adapter-driven save/restart/download/revoke fixture. No test uses real LINE, cloud storage or paid models. Search/index handling is Task 8; Audit delivery, credential rotation/runtime admission and operational alerts are Task 10; restore fencing and bounded metadata cleanup/load are Task 11. Successful local source policy checks do not satisfy those gates.
+
+Stopping sharing or an unapproved ACL revision closes the immediate source gate without deleting the existing publication. Destination/binding changes and permanent revocation queue publication removal; resuming sharing must freshly approve the retained context. Exhausted/deadline jobs settle as failed, and failed downloads retain cleanup recovery for uncertain Asset creation. Startup requires sourceUploadRecoveryVersion=1.
+
+Asset IDs are opaque strings (the current producer generates 32 lowercase hex
+characters), stored and returned byte-for-byte. They are not Harness source or
+Account UUIDs. Migration 027 changes only external-ID columns to text; it does
+not guess or rewrite previously coerced values. Any previously hand-loaded real
+identity requires owner reconciliation before admission. The actual private
+Asset wire response exposes `sourcePolicy`, not the request's `source`; profile
+fields are not serialized. Readiness still requires version 2, `not-scanned`
+evidence and the exact completed/not-required state. The producer's Go-serialized
+fixture is checked in both repositories and compared byte-for-byte locally.

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>群組資料 · 哈利路亞家教會</title>
+    <link rel="stylesheet" href="/api/line/harness/app.css" />
+    <script src="https://static.line-scdn.net/liff/edge/versions/2.31.1/sdk.js"></script>
+    <script type="module" src="/api/line/harness/app.js"></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="church">哈利路亞家教會</p>
+        <h1>找回群組裡的資料</h1>
+        <p>搜尋這個群組收錄的訊息與附件。</p>
+      </header>
+      <form id="search">
+        <label for="query">想找什麼？</label>
+        <div class="query-row">
+          <input
+            id="query"
+            name="query"
+            maxlength="200"
+            placeholder="例如：聖誕節同工排班"
+            required
+          /><button id="submit" disabled>搜尋</button>
+        </div>
+        <label for="kind">資料類型</label
+        ><select id="kind">
+          <option value="">全部</option>
+          <option value="text">訊息</option>
+          <option value="file">文件</option>
+          <option value="image">圖片</option>
+          <option value="audio">音訊</option>
+          <option value="video">影片</option>
+        </select>
+      </form>
+      <p id="status" role="status" aria-live="polite">正在確認 LINE 登入…</p>
+      <button id="refresh" hidden>查看查詢結果</button>
+      <section id="results" aria-label="搜尋結果"></section>
+      <footer>
+        <p>
+          資料自發布起保留 90
+          天；收回、到期或資格異動後無法查看。附件未經掃毒，請確認來源後再開啟。
+        </p>
+        <button id="reset" class="secondary" disabled>重設我的對話</button>
+        <p>只清除你的對話與查詢結果，群組原始資料仍會保留。</p>
+      </footer>
+    </main>
+  </body>
+</html>

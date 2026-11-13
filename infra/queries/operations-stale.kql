@@ -1,0 +1,7 @@
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s == "hhc-line-harness"
+| where TimeGenerated > ago(15m)
+| extend record = parse_json(Log_s)
+| where record.event == "line_harness_health"
+| summarize Latest=max(TimeGenerated)
+| where isnull(Latest) or Latest < ago(6m)

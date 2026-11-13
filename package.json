@@ -1,0 +1,48 @@
+{
+  "name": "hhc-line-harness",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26 <27"
+  },
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "test": "node --experimental-strip-types --test --test-concurrency=4 tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "start": "node dist/src/index.js",
+    "format:check": "prettier --check src tests web playwright.config.ts package.json tsconfig.json README.md AGENTS.md",
+    "format": "prettier --write src tests web playwright.config.ts package.json tsconfig.json README.md AGENTS.md",
+    "check:asset": "node --experimental-strip-types src/tools/check-asset.ts",
+    "migrate": "node --experimental-strip-types src/tools/migrate.ts",
+    "worker": "node dist/src/worker.js",
+    "test:web": "pnpm build && playwright test",
+    "worker:embeddings": "node dist/src/embedding-worker.js",
+    "embedding:activate": "node --experimental-strip-types src/tools/activate-embedding.ts",
+    "embedding:evaluate": "node --experimental-strip-types src/tools/evaluate-embedding.ts",
+    "operations": "node --experimental-strip-types src/tools/operations.ts",
+    "recovery": "node --experimental-strip-types src/tools/recovery.ts",
+    "check:boundaries": "node --experimental-strip-types scripts/check-boundaries.ts",
+    "legacy": "node --experimental-strip-types src/tools/legacy.ts"
+  },
+  "dependencies": {
+    "@azure/identity": "4.14.1",
+    "@azure/storage-queue": "12.32.0",
+    "@openai/agents": "0.21.0",
+    "fast-xml-parser": "5.12.0",
+    "fastify": "5.12.7",
+    "fflate": "0.8.3",
+    "openai": "7.55.0",
+    "pdfjs-dist": "6.5.438",
+    "pg": "8.22.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0",
+    "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
+    "prettier": "3.9.4",
+    "typescript": "5.9.3"
+  }
+}

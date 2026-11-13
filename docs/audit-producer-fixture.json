@@ -1,0 +1,462 @@
+{
+  "schemaVersion": 1,
+  "sourceService": "hhc-line-harness",
+  "actions": [
+    {
+      "action": "line.group.acl_revoke",
+      "sourceService": "hhc-line-harness",
+      "category": "line",
+      "resourceOwnerService": "hhc-line-harness",
+      "resourceType": "line_group",
+      "resourceIdGrammar": "uuid",
+      "actorTypes": [
+        "user"
+      ],
+      "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
+      "servicePrincipals": [],
+      "eventIdGrammar": "uuid",
+      "identityStrategy": "mutation_uuid_v4",
+      "outcome": "success",
+      "severity": "info",
+      "metadataClassification": "internal",
+      "retentionClass": "security",
+      "metadataSchema": "line_revision"
+    },
+    {
+      "action": "line.group.acl_revoke_requested",
+      "sourceService": "hhc-line-harness",
+      "category": "line",
+      "resourceOwnerService": "hhc-line-harness",
+      "resourceType": "line_group",
+      "resourceIdGrammar": "uuid",
+      "actorTypes": [
+        "user"
+      ],
+      "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
+      "servicePrincipals": [],
+      "eventIdGrammar": "uuid",
+      "identityStrategy": "mutation_uuid_v4",
+      "outcome": "success",
+      "severity": "info",
+      "metadataClassification": "internal",
+      "retentionClass": "security",
+      "metadataSchema": "line_revision"
+    },
+    {
+      "action": "line.group.activate",
+      "sourceService": "hhc-line-harness",
+      "category": "line",
+      "resourceOwnerService": "hhc-line-harness",
+      "resourceType": "line_group",
+      "resourceIdGrammar": "uuid",
+      "actorTypes": [
+        "user"
+      ],
+      "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
+      "servicePrincipals": [],
+      "eventIdGrammar": "uuid",
+      "identityStrategy": "mutation_uuid_v4",
+      "outcome": "success",
+      "severity": "info",
+      "metadataClassification": "internal",
+      "retentionClass": "security",
+      "metadataSchema": "line_revision"
+    },
+    {
+      "action": "line.group.configure",
+      "sourceService": "hhc-line-harness",
+      "category": "line",
+      "resourceOwnerService": "hhc-line-harness",
+      "resourceType": "line_group",
+      "resourceIdGrammar": "uuid",
+      "actorTypes": [
+        "user"
+      ],
+      "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
+      "servicePrincipals": [],
+      "eventIdGrammar": "uuid",
+      "identityStrategy": "mutation_uuid_v4",
+      "outcome": "success",
+      "severity": "info",
+      "metadataClassification": "internal",
+      "retentionClass": "security",
+      "metadataSchema": "line_revision"
+    },
+    {
+      "action": "line.group.delete",
+      "sourceService": "hhc-line-harness",
+      "category": "line",
+      "resourceOwnerService": "hhc-line-harness",
+      "resourceType": "line_group",
+      "resourceIdGrammar": "uuid",
+      "actorTypes": [
+        "user"
+      ],
+      "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
+      "servicePrincipals": [],
+      "eventIdGrammar": "uuid",
+      "identityStrategy": "mutation_uuid_v4",
+      "outcome": "success",
+      "severity": "info",
+      "metadataClassification": "internal",
+      "retentionClass": "security",
+      "metadataSchema": "line_revision"
+    },
+    {
+      "action": "line.group.pause",
+      "sourceService": "hhc-line-harness",
+      "category": "line",
+      "resourceOwnerService": "hhc-line-harness",
+      "resourceType": "line_group",
+      "resourceIdGrammar": "uuid",
+      "actorTypes": [
+        "user"
+      ],
+      "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
+      "servicePrincipals": [],
+      "eventIdGrammar": "uuid",
+      "identityStrategy": "mutation_uuid_v4",
+      "outcome": "success",
+      "severity": "info",
+      "metadataClassification": "internal",
+      "retentionClass": "security",
+      "metadataSchema": "line_revision"
+    },
+    {
+      "action": "line.source.delete",
+      "sourceService": "hhc-line-harness",
+      "category": "line",
+      "resourceOwnerService": "hhc-line-harness",
+      "resourceType": "line_source",
+      "resourceIdGrammar": "uuid",
+      "actorTypes": [
+        "anonymous",
+        "user"
+      ],
+      "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
+      "servicePrincipals": [],
+      "eventIdGrammar": "uuid",
+      "identityStrategy": "mutation_uuid_v4",
+      "outcome": "success",
+      "severity": "info",
+      "metadataClassification": "internal",
+      "retentionClass": "security",
+      "metadataSchema": "line_source_revision"
+    },
+    {
+      "action": "line.source.description",
+      "sourceService": "hhc-line-harness",
+      "category": "line",
+      "resourceOwnerService": "hhc-line-harness",
+      "resourceType": "line_source",
+      "resourceIdGrammar": "uuid",
+      "actorTypes": [
+        "anonymous",
+        "user"
+      ],
+      "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
+      "servicePrincipals": [],
+      "eventIdGrammar": "uuid",
+      "identityStrategy": "mutation_uuid_v4",
+      "outcome": "success",
+      "severity": "info",
+      "metadataClassification": "internal",
+      "retentionClass": "security",
+      "metadataSchema": "line_source_revision"
+    }
+  ],
+  "metadataSchemas": {
+    "line_revision": {
+      "constraints": [
+        "canonical positive signed int64 decimal string"
+      ],
+      "allowedTuples": [],
+      "required": [
+        "revision"
+      ],
+      "optional": [],
+      "fields": {
+        "revision": {
+          "type": "string",
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "example": {
+        "revision": "1"
+      }
+    },
+    "line_source_revision": {
+      "constraints": [
+        "canonical positive signed int64 decimal string",
+        "line_author requires anonymous empty actor; website_admin requires user Account UUID"
+      ],
+      "allowedTuples": [],
+      "required": [
+        "revision",
+        "actorKind"
+      ],
+      "optional": [],
+      "fields": {
+        "actorKind": {
+          "type": "string",
+          "enum": [
+            "line_author",
+            "website_admin"
+          ],
+          "minimum": 0,
+          "maximum": 0
+        },
+        "revision": {
+          "type": "string",
+          "minimum": 0,
+          "maximum": 0
+        }
+      },
+      "example": {
+        "actorKind": "line_author",
+        "revision": "1"
+      }
+    }
+  },
+  "idGrammars": {
+    "account_uuid": "^[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    "asset_hex": "^[0-9a-f]{32}$",
+    "empty": "exact empty string",
+    "request": "[A-Za-z0-9._:-]{1,128}; reject net.ParseIP literals and credentialFixtures predicate",
+    "uuid": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+  },
+  "denialBindings": [],
+  "credentialFixtures": [
+    {
+      "value": "YWJj.ZGVm.Z2hp",
+      "valid": true
+    },
+    {
+      "value": "YWJj.ZGVm.Z2hp.amts.bW5v",
+      "valid": true
+    },
+    {
+      "value": "YWJj",
+      "valid": false
+    },
+    {
+      "value": "YWJj.ZGVm",
+      "valid": false
+    },
+    {
+      "value": "YWJj.ZGVm.Z2hp.amts",
+      "valid": false
+    },
+    {
+      "value": "YWJj.ZGVm.Z2hp.amts.bW5v.cHFy",
+      "valid": false
+    },
+    {
+      "value": "YWJj..Z2hp",
+      "valid": false
+    },
+    {
+      "value": "a.ZGVm.Z2hp",
+      "valid": false
+    },
+    {
+      "value": "not-base64!.ZGVm.Z2hp",
+      "valid": false
+    },
+    {
+      "value": "0123456789abcdef0123456789abcdef",
+      "valid": false
+    }
+  ],
+  "credentialPredicate": "credentialFixtures.valid means matches the forbidden credential shape: exactly 3 or 5 nonempty dot-separated [A-Za-z0-9_-]+ segments, each decodable with base64.RawURLEncoding. It does not mean a valid request ID.",
+  "grammarFixtures": {
+    "account_uuid": [
+      {
+        "case": "valid-v4",
+        "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
+        "valid": true
+      },
+      {
+        "case": "valid-v7",
+        "value": "018f47d2-e5d1-7f3f-8f18-6c8e32621f71",
+        "valid": true
+      },
+      {
+        "case": "short",
+        "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f7",
+        "valid": false
+      },
+      {
+        "case": "long",
+        "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f711",
+        "valid": false
+      },
+      {
+        "case": "case",
+        "value": "018F47D2-E5D1-4F3F-8F18-6C8E32621F71",
+        "valid": false
+      },
+      {
+        "case": "hyphen",
+        "value": "018f47d2e5d14f3f8f186c8e32621f71",
+        "valid": false
+      },
+      {
+        "case": "nonhex",
+        "value": "g18f47d2-e5d1-4f3f-8f18-6c8e32621f71",
+        "valid": false
+      },
+      {
+        "case": "version",
+        "value": "018f47d2-e5d1-1f3f-8f18-6c8e32621f71",
+        "valid": false
+      },
+      {
+        "case": "variant",
+        "value": "018f47d2-e5d1-4f3f-cf18-6c8e32621f71",
+        "valid": false
+      }
+    ],
+    "asset_hex": [
+      {
+        "case": "valid",
+        "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "valid": true
+      },
+      {
+        "case": "short",
+        "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "valid": false
+      },
+      {
+        "case": "long",
+        "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "valid": false
+      },
+      {
+        "case": "case",
+        "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "valid": false
+      },
+      {
+        "case": "nonhex",
+        "value": "gaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "valid": false
+      },
+      {
+        "case": "hyphen",
+        "value": "-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "valid": false
+      },
+      {
+        "case": "uuid-shape",
+        "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
+        "valid": false
+      },
+      {
+        "case": "legacy",
+        "value": "legacy:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "valid": false
+      }
+    ],
+    "empty": [
+      {
+        "case": "valid",
+        "value": "",
+        "valid": true
+      },
+      {
+        "case": "nonempty",
+        "value": "x",
+        "valid": false
+      }
+    ],
+    "request": [
+      {
+        "case": "valid",
+        "value": "0123456789abcdef0123456789abcdef",
+        "valid": true
+      },
+      {
+        "case": "worker",
+        "value": "worker:scan-42",
+        "valid": true
+      },
+      {
+        "case": "ipv4",
+        "value": "192.168.1.1",
+        "valid": false
+      },
+      {
+        "case": "ipv6",
+        "value": "2001:db8::1",
+        "valid": false
+      },
+      {
+        "case": "email",
+        "value": "person@example.org",
+        "valid": false
+      },
+      {
+        "case": "url",
+        "value": "https://host/path?token=x",
+        "valid": false
+      },
+      {
+        "case": "jwt",
+        "value": "YWJj.ZGVm.Z2hp",
+        "valid": false
+      }
+    ],
+    "uuid": [
+      {
+        "case": "valid-v4",
+        "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f71",
+        "valid": true
+      },
+      {
+        "case": "short",
+        "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f7",
+        "valid": false
+      },
+      {
+        "case": "long",
+        "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f711",
+        "valid": false
+      },
+      {
+        "case": "case",
+        "value": "018F47D2-E5D1-4F3F-8F18-6C8E32621F71",
+        "valid": false
+      },
+      {
+        "case": "hyphen",
+        "value": "018f47d2e5d14f3f8f186c8e32621f71",
+        "valid": false
+      },
+      {
+        "case": "nonhex",
+        "value": "g18f47d2-e5d1-4f3f-8f18-6c8e32621f71",
+        "valid": false
+      },
+      {
+        "case": "version",
+        "value": "018f47d2-e5d1-1f3f-8f18-6c8e32621f71",
+        "valid": false
+      },
+      {
+        "case": "variant",
+        "value": "018f47d2-e5d1-4f3f-cf18-6c8e32621f71",
+        "valid": false
+      },
+      {
+        "case": "version-v7",
+        "value": "018f47d2-e5d1-7f3f-8f18-6c8e32621f71",
+        "valid": false
+      }
+    ]
+  },
+  "identityFixtures": [],
+  "checksum": "sha256:64967d980d1e0679d0d92cd9e48ed433d389e5c6b4bf602ebd9dc51ac830d1c3"
+}
