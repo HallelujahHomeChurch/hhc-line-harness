@@ -448,3 +448,39 @@ test("submitted confirmation survives page reload and is scoped to actor and gro
     0,
   );
 });
+
+for (const next of ["search", "reset"]) {
+  test(`unsent confirmation is removed after storage refusal and ${next}`, async ({
+    page,
+  }) => {
+    proposal = true;
+    let mutations = 0;
+    page.on("request", (r) => {
+      if (r.url().endsWith("/confirm")) mutations++;
+    });
+    await page.getByLabel("想找什麼？").fill("刪除");
+    await page.getByRole("button", { name: "搜尋", exact: true }).click();
+    await page
+      .getByRole("button", { name: "查看查詢結果", exact: true })
+      .click();
+    await page.getByRole("button", { name: "預覽變更草稿" }).click();
+    await page.evaluate(() => {
+      Storage.prototype.setItem = () => {
+        throw new DOMException("unavailable", "QuotaExceededError");
+      };
+    });
+    await page.getByRole("button", { name: "確認執行這項變更" }).click();
+    await expect(page.getByRole("status")).toContainText("尚未送出");
+    if (next === "reset") page.once("dialog", (d) => d.accept());
+    await page
+      .getByRole("button", {
+        name: next === "reset" ? "重設我的對話" : "搜尋",
+        exact: true,
+      })
+      .click();
+    await expect(
+      page.getByRole("button", { name: "確認執行這項變更" }),
+    ).toHaveCount(0);
+    expect(mutations).toBe(0);
+  });
+}

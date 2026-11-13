@@ -158,6 +158,7 @@ async function request(path: string, body?: unknown): Promise<Response> {
 function clear() {
   generation++;
   results.replaceChildren();
+  if (!confirmation) confirmationPanel.replaceChildren();
   refresh.hidden = true;
   pickingUp = false;
   refresh.disabled = resetting || !!confirmation;
