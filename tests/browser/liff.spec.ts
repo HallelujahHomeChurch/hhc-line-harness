@@ -3,7 +3,8 @@ import { createServer } from "../../src/bootstrap/server.ts";
 const group = "11111111-1111-4111-8111-111111111111",
   job = "22222222-2222-4222-8222-222222222222",
   source = "33333333-3333-4333-8333-333333333333";
-let forbidden = false,
+let downloadable = false,
+  forbidden = false,
   proposal = false,
   previews = 0,
   confirmations = 0;
@@ -56,7 +57,9 @@ const app = createServer({
                 snippet: "十二月同工排班，請依原群組公告為準。",
                 indexState: "ready",
                 gaps: ["version_not_confirmed"],
-                contentPath: null,
+                contentPath: downloadable
+                  ? `/api/line/sources/${source}/content`
+                  : null,
                 versions: [],
               },
             ],
@@ -75,6 +78,7 @@ test.afterAll(async () => {
   await app.close();
 });
 test.beforeEach(async ({ page }) => {
+  downloadable = false;
   forbidden = false;
   proposal = false;
   previews = 0;
@@ -242,3 +246,62 @@ test("unknown mutation preserves one confirmation operation for result recovery"
   expect(requests).toHaveLength(2);
   expect(requests[0]).toBe(requests[1]);
 });
+
+for (const next of ["search", "reset"]) {
+  test(`an old failed download cannot fence a newer ${next}`, async ({
+    page,
+  }) => {
+    downloadable = true;
+    await page.getByLabel("想找什麼？").fill("排班");
+    await page.getByRole("button", { name: "搜尋", exact: true }).click();
+    await page
+      .getByRole("button", { name: "查看查詢結果", exact: true })
+      .click();
+    let releaseDownload!: () => void,
+      downloadEntered!: () => void,
+      releaseNext!: () => void;
+    const downloadWait = new Promise<void>((r) => {
+        releaseDownload = r;
+      }),
+      entered = new Promise<void>((r) => {
+        downloadEntered = r;
+      }),
+      nextWait = new Promise<void>((r) => {
+        releaseNext = r;
+      });
+    await page.route("**/sources/*/content", async (route) => {
+      downloadEntered();
+      await downloadWait;
+      await route.fulfill({ status: 503, body: "" });
+    });
+    await page.getByRole("button", { name: "下載原件（未掃毒）" }).click();
+    await entered;
+    await page.route(`**/groups/*/${next}`, async (route) => {
+      await nextWait;
+      await route.fulfill({
+        json: next === "search" ? { id: job } : { ok: true },
+      });
+    });
+    if (next === "reset") page.once("dialog", (d) => d.accept());
+    await page
+      .getByRole("button", {
+        name: next === "search" ? "搜尋" : "重設我的對話",
+        exact: true,
+      })
+      .click();
+    const failed = page.waitForResponse((r) => r.url().endsWith("/content"));
+    releaseDownload();
+    await failed;
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    releaseNext();
+    await expect(
+      page.getByRole("button", { name: "搜尋", exact: true }),
+    ).toBeEnabled();
+    await expect(
+      page.getByRole("button", { name: "重設我的對話", exact: true }),
+    ).toBeEnabled();
+    await expect(page.getByRole("status")).toContainText(
+      next === "search" ? "已受理查詢" : "已重設",
+    );
+  });
+}

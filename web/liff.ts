@@ -138,9 +138,11 @@ function render(result: SearchResult) {
       const button = document.createElement("button");
       button.textContent = "下載原件（未掃毒）";
       button.onclick = () => {
+        const current = generation;
         button.disabled = true;
         void download(item.id, item.name)
           .catch((e) => {
+            if (current !== generation) return;
             clear();
             status.textContent = message(e);
           })

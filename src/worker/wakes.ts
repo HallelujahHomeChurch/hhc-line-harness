@@ -10,11 +10,11 @@ export class WakeDispatcher {
     const wake = await this.store.transaction(async (c) => {
       const runtime = (await c.query("SELECT * FROM runtime_state FOR SHARE"))
         .rows[0];
-      if (runtime?.mode !== "open") return;
+      if (!runtime || runtime.mode === "restoring") return;
       const row = (
         await c.query(
           `SELECT w.job_id FROM job_wakes w JOIN jobs j ON j.id=w.job_id JOIN sources s ON s.id=j.source_id JOIN groups g ON g.id=s.group_id
-    WHERE j.runtime_generation=$1 AND g.channel_id=$2 AND (j.kind IN ('cleanup','unpublish') OR (s.expires_at>$3 AND g.state='active'))
+    WHERE j.runtime_generation=$1 AND g.channel_id=$2 AND (j.kind IN ('cleanup','unpublish') OR ($5::boolean AND s.expires_at>$3 AND g.state='active' AND (j.kind<>'publish' OR g.sharing_enabled)))
     AND (j.state IN ('queued','retry_wait') AND j.available_at<=$3 OR j.state='leased' AND j.lease_until<=$3)
     AND (w.lease_until IS NULL OR w.lease_until<=$3) AND (w.delivered_at IS NULL OR w.delivered_at<j.available_at OR w.delivered_at<$4)
     ORDER BY w.created_at FOR UPDATE OF w SKIP LOCKED LIMIT 1`,
@@ -23,6 +23,7 @@ export class WakeDispatcher {
             this.store.channelId,
             this.store.now(),
             new Date(this.store.now().getTime() - 60_000),
+            runtime.mode === "open",
           ],
         )
       ).rows[0];

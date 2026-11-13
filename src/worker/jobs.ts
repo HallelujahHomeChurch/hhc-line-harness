@@ -25,16 +25,20 @@ export class Jobs {
       const candidate = (
         await c.query(
           `SELECT j.id,s.group_id,j.source_id FROM jobs j JOIN sources s ON s.id=j.source_id JOIN groups g ON g.id=s.group_id
-    WHERE j.kind=$1 AND j.runtime_generation=$2 AND g.channel_id=$3 AND g.state='active' AND s.state NOT IN ('revoked','expired','failed') AND s.expires_at>$4
+    WHERE j.kind=$1 AND (j.kind<>'publish' OR g.sharing_enabled) AND j.runtime_generation=$2 AND g.channel_id=$3 AND g.state='active' AND s.state NOT IN ('revoked','expired','failed') AND s.expires_at>$4
     AND j.attempts<5 AND (j.deadline IS NULL OR j.deadline>$4) AND (j.state IN ('queued','retry_wait') AND j.available_at<=$4 OR j.state='leased' AND j.lease_until<=$4)
     ORDER BY j.created_at,j.id LIMIT 1`,
           [kind, runtime.generation, this.store.channelId, this.store.now()],
         )
       ).rows[0];
       if (!candidate) return;
-      await c.query("SELECT id FROM groups WHERE id=$1 FOR SHARE", [
-        candidate.group_id,
-      ]);
+      const group = (
+        await c.query(
+          "SELECT sharing_enabled FROM groups WHERE id=$1 FOR SHARE",
+          [candidate.group_id],
+        )
+      ).rows[0];
+      if (kind === "publish" && !group?.sharing_enabled) return;
       await c.query("SELECT id FROM sources WHERE id=$1 FOR UPDATE", [
         candidate.source_id,
       ]);

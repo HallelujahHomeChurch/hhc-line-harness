@@ -36,6 +36,17 @@ PR wording now accurately states that Account provides instructions to return to
 
 The initial local rerun retained failures: the new checkout's external dependency symlink was incompatible with the extraction child's filesystem boundary, and an unrelated Admin campaign test timed out under concurrent load. Dependencies were copied into this checkout without widening extraction permissions; subsequent validation is recorded below. Neither initial failure is counted as passing. Harness rerun: 182 tests / zero skips, four compiled extraction tests, six offline Chromium tests, types/format/build/boundaries and dependency audit pass; immutable plan verification and cross-service fixtures pass. Admin full-suite and hosted checks remain separately tracked.
 
+## Round 3
+
+Three fresh read-only consultants reviewed the eight Draft PRs at the round-3 manifest heads. UI found an old download failure fencing a newer search/reset; workflow found ACL shrink permanently failing pending publication; the service seat found the current Presenter browser CI failure. No other confirmed cross-service wire mismatch was reported within its bounded coverage.
+
+- Download callbacks now retain their initiating UI generation and cannot clear newer work. Both delayed-download/new-search and delayed-download/new-reset regressions failed before the fix.
+- ACL shrink fences and holds queued/leased publication work before closing sharing. Publish claiming and wake dispatch respect that pause. Successful exact ACL reconciliation requeues eligible held work under the updated policy and preserves publication/item identity. PostgreSQL tests cover queued work and an old remote stage response arriving after the new ACL is accepted; both failed before the fix.
+- Presenter browser Web Locks testing now loads the renderer's existing TypeScript path aliases, matching the production build and the existing speech test. Its focused actual-browser case and type checks pass; hosted full CI must pass separately.
+- Coordinator follow-through found the closed-mode queue wake gate still prevented the lifecycle workers from starting. Closed mode now dispatches only cleanup/unpublish wakes; restoring dispatches none. The PostgreSQL regression failed before the fix and passes after it.
+
+Admin's complete 141-file / 1485-test suite passed with two workers, and lint/build plus the six focused Console tests pass. The initial high-concurrency timeout receipts are retained; no assertions or timeouts were relaxed. Round-2 Harness hosted CI (including image smoke and security scan) passed. Round-3 local verification passes 185 tests / zero skips, four compiled extraction tests, eight Chromium cases, formatting/types/build/boundaries and dependency audit; current-head hosted CI remains a separate gate.
+
 ## Restore and retirement boundary
 
 Closed admission is not an all-writer stop. Before restoring, an independently durable lifecycle owner must receive denials while the database and serving writers are stopped, and reconcile current denials into the external signed policy journal. Never switch the webhook to an isolated restoring database or assume LINE redelivery is durable custody. Missing custody keeps admission closed. Do not archive the legacy owner while it is still needed for retained sources, old routes or rollback.

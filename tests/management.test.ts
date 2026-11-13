@@ -405,3 +405,126 @@ test(
     );
   },
 );
+
+for (const inFlight of [false, true]) {
+  test(
+    `ACL shrink preserves ${inFlight ? "in-flight" : "queued"} publication identity`,
+    { skip: !databaseEnabled },
+    async (t) => {
+      const { pool, store, registration, management } = await fixture(t);
+      const { PublicationWorker } =
+        await import("../src/worker/publication.ts");
+      type Remote = import("../src/worker/publication.ts").PublicationRecord;
+      await registration.begin(group, line);
+      const collection = "c".repeat(32),
+        acl = "d".repeat(32);
+      const g = (
+        await pool.query(
+          "UPDATE groups SET state='active',active_from=$1,sharing_enabled=true,collection_id=$2,acl_revision=1,binding_generation=1 RETURNING id",
+          [now, collection],
+        )
+      ).rows[0];
+      await store.ingest({
+        id: "publication-event",
+        type: "message",
+        scope: "group",
+        scopeId: group,
+        publishedAt: now,
+        message: {
+          id: "publication-message",
+          type: "file",
+          fileName: "schedule.pdf",
+          mentionsBot: false,
+        },
+      });
+      await pool.query(
+        "UPDATE sources SET state='ready',asset_id=$1,asset_etag='etag'",
+        ["a".repeat(32)],
+      );
+      await pool.query(
+        "INSERT INTO jobs(source_id,kind,runtime_generation,source_revision,created_at,available_at) SELECT id,'publish',1,revision,$1,$1 FROM sources",
+        [now],
+      );
+      let revoked = false,
+        remote: Remote | undefined,
+        stages = 0;
+      let releaseStage!: () => void,
+        stageEntered!: () => void,
+        releaseRevoke!: () => void,
+        revokeEntered!: () => void;
+      const staged = new Promise<void>((r) => {
+          stageEntered = r;
+        }),
+        stageWait = new Promise<void>((r) => {
+          releaseStage = r;
+        });
+      const revoking = new Promise<void>((r) => {
+          revokeEntered = r;
+        }),
+        revokeWait = new Promise<void>((r) => {
+          releaseRevoke = r;
+        });
+      registration.ports.collection = async (id) => ({
+        id,
+        aclRevision: revoked ? 2 : 1,
+        bindingGeneration: 1,
+        audience: revoked ? [] : [`role:${actor}`],
+        readers: revoked ? [] : [{ id: acl, type: "role", subjectId: actor }],
+      });
+      management.ports.revokeReader = async () => {
+        revokeEntered();
+        await revokeWait;
+        revoked = true;
+      };
+      const worker = new PublicationWorker(store, {
+        lookup: async () => remote,
+        stage: async (p, s) => {
+          stages++;
+          remote = {
+            itemId: "e".repeat(32),
+            collectionId: p.collection_id,
+            assetId: s.asset_id!,
+            revision: p.id,
+            state: "staged",
+          };
+          stageEntered();
+          if (inFlight) await stageWait;
+          return remote;
+        },
+        activate: async () => {
+          remote = { ...remote!, state: "active" };
+          return remote;
+        },
+      });
+      const old = inFlight ? worker.processOne() : undefined;
+      if (inFlight) await staged;
+      const preview = await management.previewRevoke(actor, g.id, acl, 1);
+      const revoke = management.confirm(actor, preview.id, preview.token);
+      await revoking;
+      const claimedWhileRevoking = await worker.processOne();
+      releaseRevoke();
+      await revoke;
+      releaseStage();
+      if (old) await old;
+      await worker.processOne();
+      assert.equal(claimedWhileRevoking, false);
+      assert.equal(
+        (await pool.query("SELECT state FROM jobs WHERE kind='publish'"))
+          .rows[0].state,
+        "completed",
+      );
+      assert.equal(
+        (await pool.query("SELECT count(*)::int n FROM publications")).rows[0]
+          .n,
+        1,
+      );
+      assert.equal(
+        (await pool.query("SELECT acl_revision FROM publications")).rows[0]
+          .acl_revision,
+        "2",
+      );
+      assert.equal(stages, 1);
+      assert.equal(remote?.state, "active");
+    },
+  );
+}

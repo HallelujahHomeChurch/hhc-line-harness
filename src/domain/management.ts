@@ -416,6 +416,11 @@ export class Management {
           "UPDATE groups SET sharing_enabled=false,revision=revision+1 WHERE id=$1",
           [g.id],
         );
+        // Stop the current publication lease before changing its ACL snapshot.
+        await c.query(
+          "UPDATE jobs SET state='held',fence=fence+1,lease_until=NULL,attempts=GREATEST(0,attempts-CASE WHEN jobs.state='leased' THEN 1 ELSE 0 END) FROM sources s WHERE jobs.source_id=s.id AND s.group_id=$1 AND jobs.kind='publish' AND jobs.state IN ('queued','retry_wait','leased')",
+          [g.id],
+        );
         await c.query(
           "UPDATE management_operations SET state='applying' WHERE id=$1",
           [id],
@@ -525,6 +530,22 @@ export class Management {
           this.store.now(),
         ],
       );
+      if (mutation.previous_sharing) {
+        await c.query(
+          "UPDATE jobs SET state='queued',available_at=$2,lease_until=NULL FROM sources s WHERE jobs.source_id=s.id AND s.group_id=$1 AND jobs.kind='publish' AND jobs.state='held' AND jobs.runtime_generation=$3 AND s.expires_at>$2 AND s.state NOT IN ('revoked','expired','failed') AND s.publication_collection_id=$4 AND s.publication_binding_generation=$5",
+          [
+            g.id,
+            this.store.now(),
+            runtime.generation,
+            collection.id,
+            collection.bindingGeneration,
+          ],
+        );
+        await c.query(
+          "INSERT INTO job_wakes(job_id,created_at) SELECT j.id,$2 FROM jobs j JOIN sources s ON s.id=j.source_id WHERE s.group_id=$1 AND j.kind='publish' AND j.state='queued' ON CONFLICT(job_id) DO UPDATE SET delivered_at=NULL",
+          [g.id, this.store.now()],
+        );
+      }
       await c.query(
         "UPDATE management_operations SET state='completed' WHERE id=$1",
         [id],

@@ -60,3 +60,64 @@ test(
     assert.equal(sends, 2);
   },
 );
+
+test(
+  "closed admission dispatches only lifecycle wakes and restoring dispatches none",
+  { skip: !databaseEnabled },
+  async (t) => {
+    const pool = await database(t);
+    await pool.query("UPDATE runtime_state SET mode='open',ingest_floor=$1", [
+      now,
+    ]);
+    await pool.query(
+      "INSERT INTO groups(channel_id,line_group_id,state,active_from) VALUES('channel',$1,'active',$2)",
+      ["C" + "d".repeat(32), now],
+    );
+    const store = new Store(
+      pool,
+      new ReplyTokenCipher("a".repeat(64)),
+      "channel",
+      () => now,
+    );
+    await store.ingest({
+      id: "wake-event",
+      scope: "group",
+      scopeId: "C" + "d".repeat(32),
+      publishedAt: now,
+      type: "message",
+      message: {
+        id: "wake-message",
+        type: "file",
+        fileName: "file.pdf",
+        mentionsBot: false,
+      },
+    });
+    await pool.query(
+      "INSERT INTO jobs(source_id,kind,runtime_generation,source_revision,created_at,available_at) SELECT id,k,1,revision,$1,$1 FROM sources CROSS JOIN unnest(ARRAY['cleanup','unpublish']) k",
+      [now],
+    );
+    await pool.query(
+      "INSERT INTO job_wakes(job_id,created_at) SELECT id,$1 FROM jobs ON CONFLICT DO NOTHING",
+      [now],
+    );
+    const sent: string[] = [];
+    const wakes = new WakeDispatcher(store, async (id) => {
+      sent.push(id);
+    });
+    await pool.query("UPDATE runtime_state SET mode='restoring'");
+    assert.equal(await wakes.processOne(), false);
+    await pool.query("UPDATE runtime_state SET mode='closed'");
+    assert.equal(await wakes.processOne(), true);
+    assert.equal(await wakes.processOne(), true);
+    assert.equal(await wakes.processOne(), false);
+    assert.deepEqual(
+      (
+        await pool.query(
+          "SELECT kind FROM jobs WHERE id=ANY($1) ORDER BY kind",
+          [sent],
+        )
+      ).rows.map((x) => x.kind),
+      ["cleanup", "unpublish"],
+    );
+  },
+);
