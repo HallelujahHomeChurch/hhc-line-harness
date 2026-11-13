@@ -38,6 +38,7 @@ export class ServiceClient {
       timeoutMs?: number;
       actorUserId?: string;
       ifMatch?: number;
+      maxBytes?: number;
     } = {},
   ): Promise<Record<string, unknown>> {
     if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\"))
@@ -63,7 +64,7 @@ export class ServiceClient {
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
-      return await readJson(response);
+      return await readJson(response, options.maxBytes);
     } catch (error) {
       if (error instanceof DependencyError) throw error;
       throw new DependencyError();
@@ -73,6 +74,7 @@ export class ServiceClient {
 
 export async function readJson(
   response: Response,
+  maxBytes = 32768,
 ): Promise<Record<string, unknown>> {
   if (response.status === 204) return {};
   if (!response.ok || !response.body) {
@@ -87,7 +89,7 @@ export async function readJson(
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > 32768) throw new Error();
+      if (size > maxBytes) throw new Error();
       chunks.push(value);
     }
   } finally {

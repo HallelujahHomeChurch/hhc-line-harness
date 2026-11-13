@@ -39,6 +39,8 @@ export class AssetClient {
     const r = await this.http.json(
       `/priv/assets/collections?limit=25${cursor ? "&cursor=" + encodeURIComponent(cursor) : ""}`,
       "GET",
+      undefined,
+      { maxBytes: 128 * 1024 },
     );
     if (
       !Array.isArray(r.collections) ||
@@ -138,7 +140,12 @@ export class AssetClient {
   }
   async collection(id: string): Promise<CollectionApproval> {
     if (!isAssetId(id)) throw new Error("invalid_collection");
-    const r = await this.http.json(`/priv/assets/collections/${id}`, "GET");
+    const r = await this.http.json(
+      `/priv/assets/collections/${id}`,
+      "GET",
+      undefined,
+      { maxBytes: 128 * 1024 },
+    );
     const c = object(r.collection);
     if (
       c.id !== id ||
@@ -149,12 +156,11 @@ export class AssetClient {
       Number(c.aclRevision) <= 0 ||
       !Number.isSafeInteger(c.bindingGeneration) ||
       Number(c.bindingGeneration) <= 0 ||
-      !Array.isArray(r.acls) ||
-      r.acls.length > 128
+      !Array.isArray(r.acls)
     )
       throw new Error("dependency_unavailable");
     const readers: NonNullable<CollectionApproval["readers"]> = [];
-    const audience = r.acls.flatMap((raw) => {
+    const audience = r.acls.flatMap((raw: unknown) => {
       const a = object(raw);
       if (a.revokedAt !== undefined && a.revokedAt !== "0001-01-01T00:00:00Z")
         return [];
@@ -175,6 +181,7 @@ export class AssetClient {
       });
       return [`${a.subjectType}:${a.subjectId}`];
     });
+    if (readers.length > 128) throw new Error("dependency_unavailable");
     return {
       id,
       aclRevision: Number(c.aclRevision),

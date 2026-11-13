@@ -100,3 +100,12 @@ Three fresh read-only consultants reviewed the round-8 heads. The service seat f
 - README now links the independent private repository PR and repeated-review record while distinguishing merge/release/runtime acceptance. The original local acceptance report is explicitly marked as a historical pre-PR snapshot; the five retained original plan files remain unchanged.
 
 Admin's seventeen focused cases and lint/build pass. The preceding full revision passes all 141 files / 1494 tests when run alone with one worker; the prior concurrent contention failure remains retained. Final current-revision full-suite/hosted checks and a fresh three-consultant review are still required.
+
+## Round 9
+
+Three fresh read-only consultants reviewed the round-9 heads. Workflow found no new confirmed issue. UI identified unrelated-error receipt loss; services identified an ACL history/response-size mismatch.
+
+- Unrelated Admin 401/403/409 failures preserve an already-submitted receipt. Only the same confirmation's definitive rejection or success clears it. Regressions inject reader 403/409, reload, and recover the same operation/token.
+- The dedicated Harness collection picker omits ACL history at the owning Asset query. Detail selects current ACLs only with a 129-row sentinel and rejects more than 128 active readers; it never silently truncates an approval snapshot. Other callers retain full-history behavior. Harness budgets these two JSON responses at 128 KiB and counts only current readers. Owner PostgreSQL coverage creates 25 collections with 201 ACL rows each; consumer coverage uses the actual Go serializer fixture with 128 current readers, revoked history and bounded overflow.
+
+The regressions failed before the fixes. Harness full local verification passes 191 tests / zero skips, four compiled extraction cases and eleven Chromium cases with source/build/boundary/dependency checks. Asset PostgreSQL, HTTP and Audit client race suites pass, as does vet. Admin's nineteen focused cases and lint/build pass; current full-suite/hosted receipts and fresh review remain required.

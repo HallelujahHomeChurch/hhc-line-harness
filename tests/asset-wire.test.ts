@@ -112,3 +112,35 @@ test(
     );
   },
 );
+
+test("bounded current ACL response accepts 128 readers and excludes historical revocations", async () => {
+  const detail = structuredClone(wire.collection);
+  assert.ok(detail, "owning Go detail fixture");
+  const acl = detail.acls[0];
+  detail.acls = Array.from({ length: 128 }, (_, i) => ({
+    ...acl,
+    id: i.toString(16).padStart(32, "0"),
+    subjectId: `11111111-1111-4111-8111-${i.toString().padStart(12, "0")}`,
+  }));
+  let payload = detail;
+  const client = new AssetClient("https://asset.invalid", "fixture", async () =>
+    Response.json(payload),
+  );
+  assert.ok(Buffer.byteLength(JSON.stringify(detail)) > 32768);
+  assert.equal((await client.collection(collectionId)).readers!.length, 128);
+  payload = {
+    ...detail,
+    acls: [
+      acl,
+      ...detail.acls.map((a: Record<string, unknown>) => ({
+        ...a,
+        revokedAt: "2026-11-01T00:00:00Z",
+      })),
+    ],
+  };
+  assert.equal((await client.collection(collectionId)).readers!.length, 1);
+  payload = { ...detail, acls: [...detail.acls, acl] };
+  await assert.rejects(client.collection(collectionId));
+  payload = { ...detail, padding: "x".repeat(128 * 1024) };
+  await assert.rejects(client.collection(collectionId));
+});
