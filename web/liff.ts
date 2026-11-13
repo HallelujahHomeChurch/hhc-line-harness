@@ -4,6 +4,7 @@ declare const liff: {
   isLoggedIn: () => boolean;
   login: () => void;
   getIDToken: () => string | null;
+  getDecodedIDToken: () => { sub: string } | null;
 };
 const form = document.querySelector<HTMLFormElement>("#search")!;
 const submit = document.querySelector<HTMLButtonElement>("#submit")!,
@@ -16,15 +17,87 @@ let group = "",
   generation = 0,
   resetting = false,
   pickingUp = false;
-let confirmation: { id: string; token: string; group: string } | undefined;
+type Confirmation = { id: string; token: string; group: string };
+let confirmation: Confirmation | undefined,
+  recoveryKey = "";
 const confirmationPanel = document.createElement("section");
 results.after(confirmationPanel);
 function finishConfirmation() {
+  try {
+    sessionStorage.removeItem(recoveryKey);
+  } catch {
+    /* A retained receipt only retries the same operation. */
+  }
   confirmation = undefined;
   confirmationPanel.replaceChildren();
   submit.disabled = resetting;
   reset.disabled = resetting;
   refresh.disabled = resetting || pickingUp;
+}
+function confirmOperation(operation: Confirmation, button: HTMLButtonElement) {
+  if (button.disabled || (confirmation && confirmation.id !== operation.id))
+    return;
+  try {
+    // Store only the operation receipt, never the ID token or source contents.
+    sessionStorage.setItem(recoveryKey, JSON.stringify(operation));
+  } catch {
+    status.textContent =
+      "無法保存確認收據，尚未送出變更。請允許此頁使用工作階段儲存後重試。";
+    return;
+  }
+  confirmation = operation;
+  submit.disabled = reset.disabled = refresh.disabled = button.disabled = true;
+  void request(
+    `/api/line/harness/groups/${operation.group}/edits/${operation.id}/confirm`,
+    { token: operation.token },
+  ).then(
+    () => {
+      if (confirmation !== operation) return;
+      finishConfirmation();
+      clear();
+      status.textContent = "變更已完成，請重新查詢。";
+    },
+    (e) => {
+      if (confirmation !== operation) return;
+      if (denied(e)) {
+        finishConfirmation();
+        clear();
+      } else {
+        button.disabled = false;
+        button.textContent = "重試確認結果";
+      }
+      status.textContent = message(e);
+    },
+  );
+}
+function restoreConfirmation() {
+  let value: unknown;
+  try {
+    value = JSON.parse(sessionStorage.getItem(recoveryKey) ?? "null");
+  } catch {
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  const p = value as Record<string, unknown>;
+  if (
+    p.group !== group ||
+    typeof p.id !== "string" ||
+    !/^[0-9a-f-]{36}$/.test(p.id) ||
+    typeof p.token !== "string" ||
+    !/^[A-Za-z0-9_-]{43}$/.test(p.token)
+  )
+    return;
+  const operation = { id: p.id, token: p.token, group };
+  confirmation = operation;
+  const note = document.createElement("p"),
+    button = document.createElement("button");
+  note.textContent =
+    "先前送出的變更結果尚待確認。請核對同一筆操作，不會重新建立變更。";
+  button.textContent = "重試確認結果";
+  button.onclick = () => confirmOperation(operation, button);
+  confirmationPanel.replaceChildren(note, button);
+  submit.disabled = reset.disabled = refresh.disabled = true;
+  status.textContent = "請先確認上一筆變更結果。";
 }
 const labels: Record<string, string> = {
   semantic_index_unavailable: "語意索引暫時不可用，目前使用關鍵字搜尋",
@@ -193,34 +266,10 @@ function render(result: SearchResult) {
           confirm.onclick = () => {
             if (!confirmation && current !== generation) return;
             if (confirmation && confirmation.id !== preview.id) return;
-            confirmation ??= { id: preview.id, token: preview.token, group };
-            const operation = confirmation;
             confirmationPanel.replaceChildren(full, confirm);
-            submit.disabled = true;
-            reset.disabled = true;
-            refresh.disabled = true;
-            confirm.disabled = true;
-            void request(
-              `/api/line/harness/groups/${operation.group}/edits/${operation.id}/confirm`,
-              { token: operation.token },
-            ).then(
-              () => {
-                if (confirmation !== operation) return;
-                finishConfirmation();
-                clear();
-                status.textContent = "變更已完成，請重新查詢。";
-              },
-              (e) => {
-                if (confirmation !== operation) return;
-                if (denied(e)) {
-                  finishConfirmation();
-                  clear();
-                } else {
-                  confirm.disabled = false;
-                  confirm.textContent = "重試確認結果";
-                }
-                status.textContent = message(e);
-              },
+            confirmOperation(
+              { id: preview.id, token: preview.token, group },
+              confirm,
             );
           };
           article.append(full, confirm);
@@ -342,9 +391,21 @@ async function initialize() {
     return;
   }
   if (!liff.getIDToken()) throw new Error("forbidden");
+  // Decoded identity scopes local UI storage only; every API request still sends
+  // the raw ID token for independent server verification (LINE LIFF API contract).
+  const subject = liff.getDecodedIDToken()?.sub;
+  if (!subject || !/^U[0-9a-f]{32}$/i.test(subject))
+    throw new Error("forbidden");
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${config.liffId}:${subject}:${group}`),
+  );
+  recoveryKey = `hhc-line-harness-edit:${Array.from(new Uint8Array(digest), (x) => x.toString(16).padStart(2, "0")).join("")}`;
   submit.disabled = false;
   reset.disabled = false;
   status.textContent = "輸入關鍵字，搜尋這個群組的資料。";
+  restoreConfirmation();
+  if (confirmation) return;
   if (/^[0-9a-f-]{36}$/.test(job)) {
     refresh.hidden = false;
     await pickup();

@@ -89,7 +89,7 @@ test.beforeEach(async ({ page }) => {
     if (url === "https://static.line-scdn.net/liff/edge/versions/2.31.1/sdk.js")
       return route.fulfill({
         contentType: "text/javascript",
-        body: 'globalThis.liff={init:async()=>{},isLoggedIn:()=>true,getIDToken:()=>"fixture-token",login:()=>{throw new Error("unexpected login")}};',
+        body: 'globalThis.liff={init:async()=>{},isLoggedIn:()=>true,getIDToken:()=>"fixture-token",getDecodedIDToken:()=>({sub:sessionStorage.getItem("fixture-actor")||"U11111111111111111111111111111111"}),login:()=>{throw new Error("unexpected login")}};',
       });
     return route.abort();
   });
@@ -379,4 +379,72 @@ test("unknown confirmation cannot be discarded by result refresh or a new query"
   await expect(
     page.getByRole("button", { name: "搜尋", exact: true }),
   ).toBeEnabled();
+});
+
+test("submitted confirmation survives page reload and is scoped to actor and group", async ({
+  page,
+}) => {
+  proposal = true;
+  const requests: string[] = [];
+  await page.route("**/edits/*/confirm", (route) => {
+    requests.push(route.request().url() + route.request().postData());
+    return route.fulfill({
+      status: requests.length === 1 ? 503 : 200,
+      json: { ok: true },
+    });
+  });
+  await page.getByLabel("想找什麼？").fill("刪除");
+  await page.getByRole("button", { name: "搜尋", exact: true }).click();
+  await page.getByRole("button", { name: "查看查詢結果", exact: true }).click();
+  await page.getByRole("button", { name: "預覽變更草稿" }).click();
+  await page.getByRole("button", { name: "確認執行這項變更" }).click();
+  await expect(
+    page.getByRole("button", { name: "重試確認結果" }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(() =>
+      Object.entries(sessionStorage)
+        .filter(([key]) => key.startsWith("hhc-line-harness-edit:"))
+        .map(([, value]) => JSON.parse(value)),
+    ),
+  ).toEqual([{ id: job, token: "a".repeat(43), group }]);
+  await page.evaluate(() =>
+    sessionStorage.setItem(
+      "fixture-actor",
+      "U22222222222222222222222222222222",
+    ),
+  );
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "搜尋", exact: true }),
+  ).toBeEnabled();
+  await expect(page.getByRole("button", { name: "重試確認結果" })).toHaveCount(
+    0,
+  );
+  await page.evaluate(() => sessionStorage.removeItem("fixture-actor"));
+  await page.goto(`${origin}/api/line/harness/app#group=${source}`);
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "搜尋", exact: true }),
+  ).toBeEnabled();
+  await expect(page.getByRole("button", { name: "重試確認結果" })).toHaveCount(
+    0,
+  );
+  await page.goto(`${origin}/api/line/harness/app#group=${group}`);
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "重試確認結果" }),
+  ).toBeVisible();
+  expect(requests).toHaveLength(1);
+  await page.getByRole("button", { name: "重試確認結果" }).click();
+  await expect(page.getByRole("status")).toContainText("變更已完成");
+  expect(requests).toHaveLength(2);
+  expect(requests[0]).toBe(requests[1]);
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "搜尋", exact: true }),
+  ).toBeEnabled();
+  await expect(page.getByRole("button", { name: "重試確認結果" })).toHaveCount(
+    0,
+  );
 });
