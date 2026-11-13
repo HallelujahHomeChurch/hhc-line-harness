@@ -47,6 +47,17 @@ Three fresh read-only consultants reviewed the eight Draft PRs at the round-3 ma
 
 Admin's complete 141-file / 1485-test suite passed with two workers, and lint/build plus the six focused Console tests pass. The initial high-concurrency timeout receipts are retained; no assertions or timeouts were relaxed. Round-2 Harness hosted CI (including image smoke and security scan) passed. Round-3 local verification passes 185 tests / zero skips, four compiled extraction tests, eight Chromium cases, formatting/types/build/boundaries and dependency audit; current-head hosted CI remains a separate gate.
 
+## Round 4
+
+Three fresh read-only consultants reviewed all eight PR heads listed in the round-4 manifest. The service-contract seat reported no new confirmed mismatch; the UI/workflow seats identified four actionable defects:
+
+- Active-group setup could update an ACL while an older publication lease retained the previous snapshot. Setup now fences publication jobs before the announcement/effect boundary; announcing or unknown approvals at the current group revision prevent fresh publish claims. A successfully accepted snapshot requeues the same publication identity. The delayed-stage/reader-expansion PostgreSQL regression failed before the fix.
+- Expired or revoked LINE media could stop an unrelated current Bible/Timer projection. Presenter now checks the current projection owner and displayed item before stopping; old resources can still be released. Six expiry/removal cases cover media, Bible and Timer ownership.
+- Asset collections failures or expired setup links prevented independent group pause/delete controls from loading. Admin Console loads groups independently and scopes non-authority setup/collection failures to their panels; authority loss still clears management controls. Tests cover 503, expired setup and a still-pending collection request.
+- A submitted ACL confirmation could not recover after preview expiry or refresh. Admin distinguishes unused approval from an already-submitted operation, retains its same-actor/flow receipt across status/browser refresh, and explicitly retries that operation under current server authority. Unused approvals are not persisted; account/flow changes and navigation discard the local receipt. Success or definitive authority/policy rejection clears it.
+
+The eight round-4 published heads all passed their applicable hosted checks before these newly identified fixes. This is historical evidence, not validation of the subsequent heads. Harness post-fix local validation passes 186 PostgreSQL/domain tests, four compiled extraction tests, eight browser cases, types/format/build/boundaries and dependency audit. Fresh three-consultant review and hosted checks remain required for the updated heads.
+
 ## Restore and retirement boundary
 
 Closed admission is not an all-writer stop. Before restoring, an independently durable lifecycle owner must receive denials while the database and serving writers are stopped, and reconcile current denials into the external signed policy journal. Never switch the webhook to an isolated restoring database or assume LINE redelivery is durable custody. Missing custody keeps admission closed. Do not archive the legacy owner while it is still needed for retained sources, old routes or rollback.

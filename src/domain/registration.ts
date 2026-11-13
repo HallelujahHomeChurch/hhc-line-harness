@@ -499,6 +499,10 @@ export class Registration {
         ],
       );
       await c.query(
+        "UPDATE jobs SET state='held',fence=fence+1,lease_until=NULL,attempts=GREATEST(0,attempts-CASE WHEN jobs.state='leased' THEN 1 ELSE 0 END) FROM sources s WHERE jobs.source_id=s.id AND s.group_id=$1 AND jobs.kind='publish' AND jobs.state IN ('queued','retry_wait','leased')",
+        [intent.group_id],
+      );
+      await c.query(
         "UPDATE setup_intents SET state='announcing',revision=revision+1,confirmation_hash=NULL,delivery_id=$2 WHERE id=$1",
         [id, deliveryId],
       );

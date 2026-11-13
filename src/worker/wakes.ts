@@ -14,7 +14,7 @@ export class WakeDispatcher {
       const row = (
         await c.query(
           `SELECT w.job_id FROM job_wakes w JOIN jobs j ON j.id=w.job_id JOIN sources s ON s.id=j.source_id JOIN groups g ON g.id=s.group_id
-    WHERE j.runtime_generation=$1 AND g.channel_id=$2 AND (j.kind IN ('cleanup','unpublish') OR ($5::boolean AND s.expires_at>$3 AND g.state='active' AND (j.kind<>'publish' OR g.sharing_enabled)))
+    WHERE j.runtime_generation=$1 AND g.channel_id=$2 AND (j.kind IN ('cleanup','unpublish') OR ($5::boolean AND s.expires_at>$3 AND g.state='active' AND (j.kind<>'publish' OR (g.sharing_enabled AND NOT EXISTS (SELECT 1 FROM setup_intents i WHERE i.group_id=g.id AND i.group_revision=g.revision AND i.state IN ('announcing','unknown'))))))
     AND (j.state IN ('queued','retry_wait') AND j.available_at<=$3 OR j.state='leased' AND j.lease_until<=$3)
     AND (w.lease_until IS NULL OR w.lease_until<=$3) AND (w.delivered_at IS NULL OR w.delivered_at<j.available_at OR w.delivered_at<$4)
     ORDER BY w.created_at FOR UPDATE OF w SKIP LOCKED LIMIT 1`,

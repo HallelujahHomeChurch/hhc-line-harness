@@ -461,3 +461,127 @@ test(
     );
   },
 );
+
+test(
+  "active setup ACL expansion fences a staged publication and resumes the same identity",
+  { skip: !databaseEnabled },
+  async (t) => {
+    const f = await fixture(t),
+      collection = "c".repeat(32),
+      reader = "33333333-3333-4333-8333-333333333333";
+    await f.pool.query("UPDATE runtime_state SET ingest_floor=$1", [now]);
+    await f.registration.configure(f.intent, line, {
+      sharing: true,
+      collectionId: collection,
+    });
+    let preview = await f.registration.preview(f.intent, line, group);
+    await f.registration.confirm(
+      f.intent,
+      preview.token,
+      line,
+      group,
+      await f.delivery("initial"),
+    );
+    const store = f.registration.store;
+    await store.ingest({
+      id: "expansion-event",
+      type: "message",
+      scope: "group",
+      scopeId: group,
+      publishedAt: now,
+      message: {
+        id: "expansion-message",
+        type: "file",
+        fileName: "file.pdf",
+        mentionsBot: false,
+      },
+    });
+    await f.pool.query(
+      "UPDATE sources SET state='ready',asset_id=$1,asset_etag='etag'",
+      ["a".repeat(32)],
+    );
+    await f.pool.query(
+      "INSERT INTO jobs(source_id,kind,runtime_generation,source_revision,created_at,available_at) SELECT id,'publish',1,revision,$1,$1 FROM sources",
+      [now],
+    );
+    const { PublicationWorker } = await import("../src/worker/publication.ts");
+    type Remote = import("../src/worker/publication.ts").PublicationRecord;
+    let remote: Remote | undefined,
+      stages = 0,
+      release!: () => void,
+      entered!: () => void;
+    const waiting = new Promise<void>((r) => {
+        release = r;
+      }),
+      started = new Promise<void>((r) => {
+        entered = r;
+      });
+    const worker = new PublicationWorker(store, {
+      lookup: async () => remote,
+      stage: async (p, s) => {
+        stages++;
+        remote = {
+          itemId: "e".repeat(32),
+          collectionId: p.collection_id,
+          assetId: s.asset_id!,
+          revision: p.id,
+          state: "staged",
+        };
+        entered();
+        await waiting;
+        return remote;
+      },
+      activate: async () => {
+        remote = { ...remote!, state: "active" };
+        return remote;
+      },
+    });
+    const work = worker.processOne();
+    await started;
+    const audience = ["role:readers"];
+    f.registration.ports.subject = async (_a, type, id) => ({
+      id,
+      type,
+      label: "Reader",
+    });
+    f.registration.ports.collection = async (id) => ({
+      id,
+      aclRevision: f.state.acl,
+      bindingGeneration: 1,
+      audience: [...audience],
+    });
+    f.registration.ports.addReader = async (_id, subject) => {
+      f.state.acl++;
+      audience.push(`${subject.type}:${subject.id}`);
+    };
+    const intent = await f.registration.begin(group, line);
+    await f.registration.configure(intent, line, {
+      sharing: true,
+      collectionId: collection,
+      addReader: { type: "role", id: reader },
+    });
+    preview = await f.registration.preview(intent, line, group);
+    await f.registration.confirm(
+      intent,
+      preview.token,
+      line,
+      group,
+      await f.delivery("expansion"),
+    );
+    release();
+    await work;
+    await worker.processOne();
+    assert.equal(
+      (await f.pool.query("SELECT state FROM jobs WHERE kind='publish'"))
+        .rows[0].state,
+      "completed",
+    );
+    assert.equal(
+      (await f.pool.query("SELECT count(*)::int n FROM publications")).rows[0]
+        .n,
+      1,
+    );
+    assert.equal(stages, 1);
+    assert.equal(remote?.state, "active");
+  },
+);
