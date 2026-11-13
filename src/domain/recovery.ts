@@ -275,6 +275,19 @@ export class Recovery {
         .rows[0];
       if (runtime.mode !== "restoring" || runtime.generation !== newGeneration)
         throw new Error("restore_generation_conflict");
+      // A backup cannot discharge cleanup obligations for identities it never contained.
+      // Keep the exact signed journal as the recovery handoff; admission stays fenced.
+      const sourceIDs = new Set(
+        (await c.query("SELECT id FROM sources")).rows.map((r) => r.id),
+      );
+      const publicationIDs = new Set(
+        (await c.query("SELECT id FROM publications")).rows.map((r) => r.id),
+      );
+      if (
+        journal.sources.some((s) => !sourceIDs.has(s.id)) ||
+        journal.publications.some((p) => !publicationIDs.has(p.id))
+      )
+        throw new Error("journal_identities_missing_from_backup");
       const existingGroups = (
         await c.query("SELECT * FROM groups ORDER BY id FOR UPDATE")
       ).rows;

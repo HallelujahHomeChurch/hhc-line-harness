@@ -71,3 +71,14 @@ All three regressions failed before their fixes. Harness post-fix full local ver
 ## Restore and retirement boundary
 
 Closed admission is not an all-writer stop. Before restoring, an independently durable lifecycle owner must receive denials while the database and serving writers are stopped, and reconcile current denials into the external signed policy journal. Never switch the webhook to an isolated restoring database or assume LINE redelivery is durable custody. Missing custody keeps admission closed. Do not archive the legacy owner while it is still needed for retained sources, old routes or rollback.
+
+## Round 6
+
+Three fresh read-only consultants identified four confirmed findings across UI/UX, recovery workflow and service contracts. Each was reproduced before its fix.
+
+- LIFF result pickup now serializes reads, so an older pending/error response cannot overwrite a newer completed result from repeated refresh clicks.
+- A submitted source confirmation has independent state and a separate recovery panel. Unknown results retain the exact operation/token; refresh, new search and reset cannot discard it. Successful or definitive denied/gone results release the controls. The browser regression covers the interrupted confirmation and same-operation retry.
+- Recovery refuses to mark reconciliation complete when the current signed journal contains source/publication identities absent from the restored backup. It remains `restoring`, blocks admission and retains the signed-journal handoff requirement. Two PostgreSQL cases cover missing source and publication identities; there is no override that silently drops external cleanup obligations.
+- Asset collection list/read audits now permit precisely the Harness service actor, with matching owning Audit catalog, helper validation and generated producer fixture. No human actor is fabricated and unrelated service principals remain denied. An HTTP test with real workload authentication, Audit validation, migrated PostgreSQL and durable outbox reproduces the former 503 and verifies both reads and provenance after the fix.
+
+Harness full local verification passes 190 tests / zero skips, four compiled extraction tests and ten Chromium cases, plus types/format/build/boundaries/dependency audit. Audit source/vet, disposable PostgreSQL permissions/recovery and bootstrap checks pass. Asset HTTP/Audit/outbox race tests pass; full-suite and current-head hosted receipts are recorded separately. A fresh three-person round is required for these changed heads.

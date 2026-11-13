@@ -14,7 +14,18 @@ const status = document.querySelector<HTMLElement>("#status")!,
 let group = "",
   job = "",
   generation = 0,
-  resetting = false;
+  resetting = false,
+  pickingUp = false;
+let confirmation: { id: string; token: string; group: string } | undefined;
+const confirmationPanel = document.createElement("section");
+results.after(confirmationPanel);
+function finishConfirmation() {
+  confirmation = undefined;
+  confirmationPanel.replaceChildren();
+  submit.disabled = resetting;
+  reset.disabled = resetting;
+  refresh.disabled = resetting || pickingUp;
+}
 const labels: Record<string, string> = {
   semantic_index_unavailable: "語意索引暫時不可用，目前使用關鍵字搜尋",
   agent_unavailable_basic_search:
@@ -75,6 +86,8 @@ function clear() {
   generation++;
   results.replaceChildren();
   refresh.hidden = true;
+  pickingUp = false;
+  refresh.disabled = resetting || !!confirmation;
 }
 async function download(id: string, name: string) {
   const response = await request(`/api/line/sources/${id}/content`);
@@ -152,11 +165,12 @@ function render(result: SearchResult) {
       };
       article.append(button);
     }
-    if (result.proposal?.sourceId === item.id) {
+    if (!confirmation && result.proposal?.sourceId === item.id) {
       const draft = result.proposal,
         button = document.createElement("button");
       button.textContent = "預覽變更草稿";
       button.onclick = () => {
+        if (confirmation) return;
         const current = generation;
         button.disabled = true;
         void (async () => {
@@ -170,33 +184,42 @@ function render(result: SearchResult) {
               edit,
             )
           ).json()) as { id: string; token: string; text: string };
-          if (current !== generation || !article.isConnected) return;
+          if (current !== generation || !article.isConnected || confirmation)
+            return;
           const full = document.createElement("p"),
             confirm = document.createElement("button");
           full.textContent = preview.text;
           confirm.textContent = "確認執行這項變更";
           confirm.onclick = () => {
-            if (current !== generation) return;
+            if (!confirmation && current !== generation) return;
+            if (confirmation && confirmation.id !== preview.id) return;
+            confirmation ??= { id: preview.id, token: preview.token, group };
+            const operation = confirmation;
+            confirmationPanel.replaceChildren(full, confirm);
+            submit.disabled = true;
+            reset.disabled = true;
+            refresh.disabled = true;
             confirm.disabled = true;
             void request(
-              `/api/line/harness/groups/${group}/edits/${preview.id}/confirm`,
-              { token: preview.token },
+              `/api/line/harness/groups/${operation.group}/edits/${operation.id}/confirm`,
+              { token: operation.token },
             ).then(
               () => {
-                if (current === generation) {
-                  clear();
-                  status.textContent = "變更已完成，請重新查詢。";
-                }
+                if (confirmation !== operation) return;
+                finishConfirmation();
+                clear();
+                status.textContent = "變更已完成，請重新查詢。";
               },
               (e) => {
-                if (current === generation) {
-                  if (denied(e)) clear();
-                  else {
-                    confirm.disabled = false;
-                    confirm.textContent = "重試確認結果";
-                  }
-                  status.textContent = message(e);
+                if (confirmation !== operation) return;
+                if (denied(e)) {
+                  finishConfirmation();
+                  clear();
+                } else {
+                  confirm.disabled = false;
+                  confirm.textContent = "重試確認結果";
                 }
+                status.textContent = message(e);
               },
             );
           };
@@ -214,12 +237,15 @@ function render(result: SearchResult) {
   }
 }
 async function pickup() {
+  if (pickingUp || resetting || confirmation) return;
+  pickingUp = true;
+  refresh.disabled = true;
   const current = generation;
   try {
     const value = (await (
       await request(`/api/line/harness/groups/${group}/results/${job}`)
     ).json()) as { state: string; result?: SearchResult };
-    if (current !== generation) return;
+    if (current !== generation || confirmation) return;
     if (value.result) render(value.result);
     else {
       results.replaceChildren();
@@ -230,7 +256,7 @@ async function pickup() {
     }
     refresh.hidden = value.state === "failed";
   } catch (e) {
-    if (current === generation) {
+    if (current === generation && !confirmation) {
       if (denied(e)) clear();
       else {
         results.replaceChildren();
@@ -238,11 +264,16 @@ async function pickup() {
       }
       status.textContent = message(e);
     }
+  } finally {
+    if (current === generation) {
+      pickingUp = false;
+      refresh.disabled = resetting || !!confirmation;
+    }
   }
 }
 form.onsubmit = (event) => {
   event.preventDefault();
-  if (submit.disabled || resetting) return;
+  if (submit.disabled || resetting || confirmation) return;
   clear();
   const current = generation;
   submit.disabled = true;
@@ -270,7 +301,7 @@ refresh.onclick = () => {
   void pickup();
 };
 reset.onclick = () => {
-  if (resetting) return;
+  if (resetting || confirmation) return;
   if (!confirm("清除你在本群組的對話與查詢結果？群組原始資料仍會保留。"))
     return;
   clear();

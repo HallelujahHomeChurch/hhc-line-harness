@@ -347,3 +347,40 @@ test(
     assert.deepEqual(source, { state: "revoked", body: null });
   },
 );
+
+test(
+  "journal-only identities block admission instead of losing external cleanup",
+  { skip: !databaseEnabled },
+  async (t) => {
+    for (const missing of ["source", "publication"] as const) {
+      await t.test(missing, async (t) => {
+        const f = await fixture(t);
+        await f.pool.query(
+          "INSERT INTO publications(source_id,collection_id,item_id,source_revision,group_revision,acl_revision,binding_generation,state,created_at) VALUES($1,$2,$3,1,1,1,1,'revoked',$4)",
+          [f.s, "a".repeat(32), "b".repeat(32), f.now],
+        );
+        await f.recovery.quiesce();
+        const journal = await f.recovery.exportJournal();
+        await f.pool.query("DELETE FROM publications");
+        if (missing === "source") await f.pool.query("DELETE FROM sources");
+        await assert.rejects(
+          f.recovery.restore(journal, f.now, "2"),
+          /journal_identities_missing_from_backup/,
+        );
+        await assert.rejects(
+          f.recovery.admit("2", journal.signature),
+          /restore_not_verified/,
+        );
+        assert.equal(
+          (await f.pool.query("SELECT mode FROM runtime_state")).rows[0].mode,
+          "restoring",
+        );
+        assert.equal(
+          (await f.pool.query("SELECT reconciled_at FROM recovery_records"))
+            .rows[0].reconciled_at,
+          null,
+        );
+      });
+    }
+  },
+);

@@ -305,3 +305,78 @@ for (const next of ["search", "reset"]) {
     );
   });
 }
+
+test("pickup serializes repeated clicks while a response is pending", async ({
+  page,
+}) => {
+  let release!: () => void,
+    entered!: () => void,
+    reads = 0;
+  const wait = new Promise<void>((r) => {
+    release = r;
+  });
+  const started = new Promise<void>((r) => {
+    entered = r;
+  });
+  await page.route("**/groups/*/results/*", async (route) => {
+    reads++;
+    entered();
+    await wait;
+    await route.continue();
+  });
+  await page.getByLabel("想找什麼？").fill("排班");
+  await page.getByRole("button", { name: "搜尋", exact: true }).click();
+  const refresh = page.getByRole("button", {
+    name: "查看查詢結果",
+    exact: true,
+  });
+  await refresh.click();
+  await started;
+  try {
+    await expect(refresh).toBeDisabled();
+    await refresh.evaluate((button: HTMLButtonElement) => button.click());
+    expect(reads).toBe(1);
+  } finally {
+    release();
+  }
+  await expect(page.locator("article")).toHaveCount(1);
+  await expect(refresh).toBeEnabled();
+});
+
+test("unknown confirmation cannot be discarded by result refresh or a new query", async ({
+  page,
+}) => {
+  proposal = true;
+  const requests: string[] = [];
+  await page.route("**/edits/*/confirm", (route) => {
+    requests.push(route.request().url() + route.request().postData());
+    return route.fulfill({
+      status: requests.length === 1 ? 503 : 200,
+      json: { ok: true },
+    });
+  });
+  await page.getByLabel("想找什麼？").fill("刪除");
+  await page.getByRole("button", { name: "搜尋", exact: true }).click();
+  await page.getByRole("button", { name: "查看查詢結果", exact: true }).click();
+  await page.getByRole("button", { name: "預覽變更草稿" }).click();
+  await page.getByRole("button", { name: "確認執行這項變更" }).click();
+  await expect(
+    page.getByRole("button", { name: "重試確認結果" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "查看查詢結果", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "搜尋", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "重設我的對話" }),
+  ).toBeDisabled();
+  await page.getByRole("button", { name: "重試確認結果" }).click();
+  await expect(page.getByRole("status")).toContainText("變更已完成");
+  expect(requests).toHaveLength(2);
+  expect(requests[0]).toBe(requests[1]);
+  await expect(
+    page.getByRole("button", { name: "搜尋", exact: true }),
+  ).toBeEnabled();
+});
