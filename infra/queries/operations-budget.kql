@@ -1,0 +1,6 @@
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s == "hhc-line-harness"
+| where TimeGenerated > ago(65m)
+| extend record = parse_json(Log_s)
+| where record.event == "line_harness_budget_alert"
+| summarize FirstObserved=min(TimeGenerated) by alertId=tostring(record.alertId), provider=tostring(record.provider), month=tostring(record.month), kind=tostring(record.kind)

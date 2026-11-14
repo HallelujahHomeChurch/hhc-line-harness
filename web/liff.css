@@ -1,0 +1,150 @@
+:root {
+  font-family: "PingFang TC", "Noto Sans TC", sans-serif;
+  color: #182e3e;
+  background: #f5f8fa;
+  font-size: 16px;
+  line-height: 1.6;
+  --blue: #255b80;
+  --muted: #516777;
+  --line: #c8d5df;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+main {
+  max-width: 700px;
+  padding: 36px 22px 48px;
+  margin: auto;
+}
+header {
+  border-left: 5px solid var(--blue);
+  padding-left: 20px;
+  margin-bottom: 30px;
+}
+.church {
+  letter-spacing: 0.14em;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-weight: 650;
+}
+h1 {
+  font-family: "PingFang TC", sans-serif;
+  font-size: clamp(1.6rem, 6vw, 2.2rem);
+  line-height: 1.3;
+  letter-spacing: -0.04em;
+  margin: 0.4em 0;
+}
+header p:last-child {
+  margin-bottom: 0;
+  color: var(--muted);
+}
+label {
+  display: block;
+  font-weight: 650;
+  margin: 16px 0 7px;
+}
+.query-row {
+  display: flex;
+  gap: 8px;
+}
+input,
+select,
+button {
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-height: 46px;
+  padding: 10px 13px;
+}
+input {
+  min-width: 0;
+  flex: 1;
+  background: white;
+}
+button {
+  background: var(--blue);
+  color: white;
+  cursor: pointer;
+  font-weight: 600;
+  white-space: nowrap;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 3px solid #b17417;
+  outline-offset: 3px;
+}
+select {
+  width: 100%;
+  background: white;
+}
+#status {
+  color: var(--muted);
+  margin-top: 24px;
+}
+article {
+  border-top: 1px solid var(--line);
+  padding: 22px 0;
+}
+h2 {
+  font-size: 1.15rem;
+  overflow-wrap: anywhere;
+  margin: 0 0 8px;
+}
+.meta,
+.gaps {
+  font-size: 0.85rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.snippet {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.gaps {
+  border-left: 3px solid #b17417;
+  padding-left: 10px;
+}
+footer {
+  margin-top: 36px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.secondary {
+  background: transparent;
+  color: var(--blue);
+}
+[hidden] {
+  display: none !important;
+}
+@media (prefers-reduced-motion: no-preference) {
+  button {
+    transition: background 0.12s;
+  }
+  button:hover:not(:disabled) {
+    background: #1b4563;
+  }
+}
+@media (max-width: 380px) {
+  main {
+    padding: 24px 16px;
+  }
+  .query-row {
+    flex-wrap: wrap;
+  }
+  .query-row input {
+    flex-basis: 100%;
+  }
+  .query-row button {
+    width: 100%;
+  }
+}
