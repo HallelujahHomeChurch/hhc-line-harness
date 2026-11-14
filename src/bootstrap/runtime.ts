@@ -159,6 +159,7 @@ export function createRuntime(
     sourceAccess: {
       token: config.sourceAccessToken,
       check: (input: unknown) => sourceAccess.check(input),
+      checkBatch: (input: unknown) => sourceAccess.checkBatch(input),
     },
     initialize: async () => {
       await requireRuntimeGeneration(pool, config.runtimeGeneration ?? "1");

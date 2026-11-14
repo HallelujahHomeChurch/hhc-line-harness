@@ -15,11 +15,16 @@ export async function invalidate(
 ) {
   const source = (
     await c.query(
-      "UPDATE sources SET state=$2,revision=revision+1,body=NULL,file_name=NULL,upload_file_name=NULL,author_id=NULL,description=NULL WHERE id=$1 AND state NOT IN ('revoked','expired') RETURNING id,asset_id,revision",
+      "UPDATE sources SET state=$2,revision=revision+1,body=NULL,file_name=NULL,upload_file_name=NULL,author_id=NULL,description=NULL WHERE id=$1 AND state NOT IN ('revoked','expired') RETURNING id,asset_id,revision,group_id",
       [id, state],
     )
   ).rows[0];
   if (!source) return;
+  // Keep source revocation independent of management and Reply generations.
+  await c.query(
+    "UPDATE groups SET revocation_revision=revocation_revision+1 WHERE id=$1",
+    [source.group_id],
+  );
   await c.query(
     "UPDATE source_edits SET state='cancelled',text_ciphertext=NULL WHERE source_id=$1 AND state='preview'",
     [id],

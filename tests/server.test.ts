@@ -173,6 +173,10 @@ test("source callback requires its dedicated caller/token and fails closed on de
     channelSecret: secret,
     checkDatabase: async () => {},
     sourceAccess: {
+      checkBatch: async () => {
+        calls++;
+        throw new Error("database secret");
+      },
       token: "a".repeat(64),
       check: async () => {
         calls++;
@@ -180,24 +184,25 @@ test("source callback requires its dedicated caller/token and fails closed on de
       },
     },
   });
-  for (const [caller, token, status] of [
-    ["asset-api", "a".repeat(64), 503],
-    ["asset-api", "b".repeat(64), 403],
-    ["hhc-line-function-bot", "a".repeat(64), 403],
-  ] as const) {
-    const response = await app.inject({
-      method: "POST",
-      url: "/priv/source/check",
-      payload: { version: 1, mode: "original" },
-      headers: {
-        "x-hhc-harness-service-caller": caller,
-        "x-hhc-harness-service-token": token,
-      },
-    });
-    assert.equal(response.statusCode, status);
-    assert.doesNotMatch(response.body, /database|secret/);
-  }
-  assert.equal(calls, 1);
+  for (const route of ["/priv/source/check", "/priv/source/check-batch"])
+    for (const [caller, token, status] of [
+      ["asset-api", "a".repeat(64), 503],
+      ["asset-api", "b".repeat(64), 403],
+      ["hhc-line-function-bot", "a".repeat(64), 403],
+    ] as const) {
+      const response = await app.inject({
+        method: "POST",
+        url: route,
+        payload: { version: 1, mode: "original" },
+        headers: {
+          "x-hhc-harness-service-caller": caller,
+          "x-hhc-harness-service-token": token,
+        },
+      });
+      assert.equal(response.statusCode, status);
+      assert.doesNotMatch(response.body, /database|secret/);
+    }
+  assert.equal(calls, 2);
   await app.close();
 });
 

@@ -17,7 +17,11 @@ export function createServer(options: {
   checkDatabase: () => Promise<void>;
   intake?: { botId: string; ingest: (event: LineEvent) => Promise<void> };
   content?: Pick<ProtectedContent, "get">;
-  sourceAccess?: { token: string; check: (input: unknown) => Promise<unknown> };
+  sourceAccess?: {
+    token: string;
+    check: (input: unknown) => Promise<unknown>;
+    checkBatch: (input: unknown) => Promise<unknown>;
+  };
 }) {
   if (!options.channelSecret.trim())
     throw new Error("LINE_CHANNEL_SECRET is required");
@@ -124,39 +128,45 @@ export function createServer(options: {
     const sourceAccess = options.sourceAccess;
     if (!/^[0-9a-f]{64}$/.test(sourceAccess.token))
       throw new Error("invalid_source_credential");
-    app.post(
-      "/priv/source/check",
-      { bodyLimit: 8192 },
-      async (request, reply) => {
-        const token = request.headers["x-hhc-harness-service-token"];
-        if (
-          request.headers["x-hhc-harness-service-caller"] !== "asset-api" ||
-          typeof token !== "string" ||
-          !/^[0-9a-f]{64}$/.test(token) ||
-          !timingSafeEqual(Buffer.from(token), Buffer.from(sourceAccess.token))
-        )
-          return reply.code(403).send({ error: "forbidden" });
-        let input: unknown;
-        try {
-          if (!Buffer.isBuffer(request.body)) throw new Error();
-          input = JSON.parse(request.body.toString("utf8"));
-        } catch {
-          return reply.code(400).send({ error: "invalid_source_request" });
-        }
-        try {
-          return await sourceAccess.check(input);
-        } catch (error) {
+    for (const batch of [false, true])
+      app.post(
+        batch ? "/priv/source/check-batch" : "/priv/source/check",
+        { bodyLimit: batch ? 65536 : 8192 },
+        async (request, reply) => {
+          const token = request.headers["x-hhc-harness-service-token"];
           if (
-            error instanceof Error &&
-            ["invalid_source_request", "invalid_payload"].includes(
-              error.message,
+            request.headers["x-hhc-harness-service-caller"] !== "asset-api" ||
+            typeof token !== "string" ||
+            !/^[0-9a-f]{64}$/.test(token) ||
+            !timingSafeEqual(
+              Buffer.from(token),
+              Buffer.from(sourceAccess.token),
             )
           )
+            return reply.code(403).send({ error: "forbidden" });
+          let input: unknown;
+          try {
+            if (!Buffer.isBuffer(request.body)) throw new Error();
+            input = JSON.parse(request.body.toString("utf8"));
+          } catch {
             return reply.code(400).send({ error: "invalid_source_request" });
-          return reply.code(503).send({ error: "source_unavailable" });
-        }
-      },
-    );
+          }
+          try {
+            return await (batch
+              ? sourceAccess.checkBatch(input)
+              : sourceAccess.check(input));
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              ["invalid_source_request", "invalid_payload"].includes(
+                error.message,
+              )
+            )
+              return reply.code(400).send({ error: "invalid_source_request" });
+            return reply.code(503).send({ error: "source_unavailable" });
+          }
+        },
+      );
   }
   app.post("/api/line/webhook", async (request, reply) => {
     const signature = request.headers["x-line-signature"];

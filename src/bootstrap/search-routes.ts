@@ -129,7 +129,11 @@ export function searchRoutes(app: FastifyInstance, access: SearchAccess) {
             );
         } catch (error) {
           const code =
-            error instanceof Error ? error.message : "search_unavailable";
+            error instanceof Error
+              ? error.message === "content_forbidden"
+                ? "search_forbidden"
+                : error.message
+              : "search_unavailable";
           const status = ["invalid_search", "invalid_edit"].includes(code)
             ? 400
             : ["search_forbidden", "edit_forbidden"].includes(code)
