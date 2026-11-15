@@ -28,7 +28,7 @@ pnpm audit --prod
 
 `pnpm worker` 使用獨立 `LINE_DOWNLOAD_ACCESS_TOKEN`、Asset workload credential 與 queue managed identity，不需要 Account、Reply encryption 或 API Reply credential。每次執行最多處理 100 個喚醒、最長 10 分鐘；PG lease 決定實際工作。API 常駐負責來源 callback、互動、wake dispatcher 與到期掃描。Queue/scaler、最小副本與權限設定需另行部署驗收。
 
-`pnpm check:asset` 只查指定 `ASSET_API_ORIGIN`／`ASSET_WORKLOAD_TOKEN` 的新 pair policy；`source_ready` 僅證明該契約相容，不表示整體 production readiness。所有外部 client 使用明確目的地；測試以替身取代 LINE、Asset 與 queue。
+`pnpm check:asset` 只查指定 `ASSET_API_ORIGIN`／`ASSET_WORKLOAD_AUDIENCE`／`AZURE_CLIENT_ID` 的新 pair policy；`source_ready` 僅證明該契約相容，不表示整體 production readiness。此檢查需在綁定該 managed identity 的環境執行。API／worker 各以自己的指定身分取得目前有效的 Asset token，由 SDK 快取並更新；正式設定不使用固定 token，也不回退到開發者登入。所有外部 client 使用明確目的地；測試以替身取代 LINE、Asset 與 queue。
 
 ## 實作與交付邊界
 

@@ -1,8 +1,9 @@
+import { assetHeaders, type AssetCredential } from "./asset-auth.ts";
 import { inspectLineUploadPolicy } from "./asset-policy.ts";
 
 export async function queryLineUploadPolicy(
   origin: string,
-  token: string,
+  token: AssetCredential,
   fetcher: typeof fetch = fetch,
 ) {
   try {
@@ -13,19 +14,20 @@ export async function queryLineUploadPolicy(
       base.password ||
       base.pathname !== "/" ||
       base.search ||
-      base.hash ||
-      !/^[A-Za-z0-9._~-]+$/.test(token)
+      base.hash
     )
       throw new Error();
+    const signal = AbortSignal.timeout(2000);
+    const authorization = await assetHeaders(token)(signal);
     const response = await fetcher(
       new URL("/priv/assets/upload-policy", base),
       {
         method: "POST",
         redirect: "error",
-        signal: AbortSignal.timeout(2000),
+        signal,
         headers: {
           "content-type": "application/json",
-          "x-hhc-workload-authorization": `Bearer ${token}`,
+          ...authorization,
         },
         body: JSON.stringify({
           namespace: "line.group.media-sync",

@@ -1,3 +1,4 @@
+import type { AssetCredential } from "../providers/asset-auth.ts";
 import { AuditClient, AuditDispatcher } from "../audit/outbox.ts";
 import { EmbeddingIndex } from "../search/embeddings.ts";
 import {
@@ -37,7 +38,7 @@ export interface RuntimeConfig {
   accountOrigin: string;
   accountToken: string;
   assetOrigin: string;
-  assetToken: string;
+  assetToken: AssetCredential;
   adminOrigin: string;
   sourceAccessToken: string;
   gatewayToken: string;

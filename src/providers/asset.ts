@@ -1,3 +1,4 @@
+import { assetHeaders, type AssetCredential } from "./asset-auth.ts";
 import { isAssetId } from "../domain/asset-id.ts";
 import { inspectLineUploadPolicy } from "./asset-policy.ts";
 import { ServiceClient } from "./http.ts";
@@ -8,14 +9,12 @@ import type {
 } from "../domain/registration.ts";
 export class AssetClient {
   readonly http: ServiceClient;
-  constructor(origin: string, token: string, fetcher: typeof fetch = fetch) {
-    if (!/^[A-Za-z0-9._~-]+$/.test(token))
-      throw new Error("invalid_asset_credential");
-    this.http = new ServiceClient(
-      origin,
-      { "X-HHC-Workload-Authorization": `Bearer ${token}` },
-      fetcher,
-    );
+  constructor(
+    origin: string,
+    token: AssetCredential,
+    fetcher: typeof fetch = fetch,
+  ) {
+    this.http = new ServiceClient(origin, assetHeaders(token), fetcher);
   }
   async checkPolicy(): Promise<void> {
     for (const namespace of ["line.group.file", "line.group.media-sync"]) {
