@@ -86,11 +86,21 @@ def verify(actual, expected):
     if actual['identity']['type'] != 'UserAssigned' or {key.lower() for key in actual['identity']['userAssignedIdentities']} != {key.lower() for key in expected['identity']['userAssignedIdentities']}:
         raise ValueError('runtime identity mismatch')
     # Azure adds read-only defaults. Every declared security/configuration value must survive readback.
-    def contains(value, wanted):
+    def contains(value, wanted, path=()):
+        if path == ('configuration', 'ingress', 'transport'):
+            return isinstance(value, str) and value.lower() == wanted.lower()
         if isinstance(wanted, dict):
-            return isinstance(value, dict) and all(k in value and contains(value[k], v) for k, v in wanted.items())
+            return isinstance(value, dict) and all(k in value and contains(value[k], v, path + (k,)) for k, v in wanted.items())
         if isinstance(wanted, list):
-            return isinstance(value, list) and len(value) == len(wanted) and all(contains(a, b) for a, b in zip(value, wanted))
+            if not isinstance(value, list) or len(value) != len(wanted):
+                return False
+            if path == ('template', 'containers', 0, 'probes'):
+                # ACA returns probes ordered by type, independently of request order.
+                if any(not isinstance(p, dict) or not isinstance(p.get('type'), str) for p in value):
+                    return False
+                value = sorted(value, key=lambda p: p['type'])
+                wanted = sorted(wanted, key=lambda p: p['type'])
+            return all(contains(a, b, path + (i,)) for i, (a, b) in enumerate(zip(value, wanted)))
         return value == wanted
     if not contains(actual['properties'], expected['properties']):
         raise ValueError('runtime configuration differs from reviewed manifest')
