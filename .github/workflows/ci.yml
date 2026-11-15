@@ -1,10 +1,16 @@
 name: CI
 on:
   pull_request:
+  workflow_call:
+    outputs:
+      image_artifact_id:
+        value: ${{ jobs.test.outputs.image_artifact_id }}
+      image_archive_sha:
+        value: ${{ jobs.test.outputs.image_archive_sha }}
 permissions:
   contents: read
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  group: harness-ci-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 jobs:
   classify:
@@ -17,16 +23,26 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - run: python3 scripts/test-ci-scope.py
+      - run: python3 scripts/test-release-image.py && python3 scripts/test-closed-release.py
+      - run: python3 scripts/test-release-workflow.py
       - id: scope
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.sha }}
-        run: python3 scripts/ci-scope.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            python3 scripts/ci-scope.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          else
+            echo 'docs_only=false' >> "$GITHUB_OUTPUT"
+          fi
   test:
     needs: classify
     if: needs.classify.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    outputs:
+      image_artifact_id: ${{ steps.image-artifact.outputs.artifact-id }}
+      image_archive_sha: ${{ steps.image-pack.outputs.archive_sha }}
     services:
       postgres:
         image: pgvector/pgvector@sha256:7d0a41464797aeb9862dfdc0bbf1526b82cfd324cdd8036df19e3545f4a9ccb8
@@ -52,6 +68,7 @@ jobs:
           node-version-file: .node-version
       - run: npm install --global pnpm@11.25.0 --ignore-scripts
       - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: python3 scripts/test-database-bootstrap.py
       - name: Install matching PostgreSQL client
         run: |
           sudo install -d /usr/share/postgresql-common/pgdg
@@ -69,13 +86,26 @@ jobs:
           docker run --rm -v "$PWD:/repo:ro"
           ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
           git /repo --log-opts HEAD --redact=100 --exit-code 1 --no-banner
-      - run: docker build -t line-harness:${{ github.sha }} .
+      - run: docker build --label org.opencontainers.image.revision=${{ github.sha }} -t line-harness:${{ github.sha }} .
       - run: python3 scripts/image-smoke.py line-harness:${{ github.sha }}
       - name: Scan runtime image
         run: >-
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock
           ghcr.io/aquasecurity/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
           image --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 line-harness:${{ github.sha }}
+      - id: image-pack
+        run: python3 scripts/release-image.py pack verified-image "$GITHUB_SHA"
+      - name: Verify image handoff locally
+        run: python3 scripts/release-image.py load verified-image "$GITHUB_SHA" '${{ steps.image-pack.outputs.archive_sha }}'
+      - id: image-artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verified-image-${{ github.sha }}-${{ github.run_attempt }}
+          path: verified-image/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
   verify:
     if: always()
     needs: [classify, test]
