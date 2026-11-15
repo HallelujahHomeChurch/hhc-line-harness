@@ -14,6 +14,52 @@ SECRETS = {k: 'https://alive-vault.vault.azure.net/secrets/hhc-line-harness-' + 
 ROOT = '/subscriptions/3765a72c-2c30-492c-8b88-7a26522903f8/resourceGroups/hhc-line-harness/providers/Microsoft.App/'
 
 class ReleaseTest(unittest.TestCase):
+    def test_serving_api_and_worker_keep_secrets_and_permissions_separate(self):
+        secrets = dict(SECRETS)
+        for key in ['worker-database-url', 'api-line-token', 'download-token', 'reply-key', 'source-gate-token', 'account-token', 'gateway-token', 'audit-token']:
+            secrets[key] = 'https://alive-vault.vault.azure.net/secrets/hhc-line-harness-' + key + '/' + 'b' * 32
+        settings = {'LINE_CHANNEL_ID': 'U'+'a'*32, 'LINE_BOT_ID': 'U'+'a'*32, 'LINE_LOGIN_CHANNEL_ID': '1234567891', 'HARNESS_RUNTIME_GENERATION': '2'}
+        api = release.render('api', IMAGE, secrets, settings)['resources'][0]
+        job = release.render('worker', IMAGE, secrets, settings)['resources'][0]
+        api_env = {x['name']: x for x in api['properties']['template']['containers'][0]['env']}
+        worker_env = {x['name']: x for x in job['properties']['template']['containers'][0]['env']}
+        self.assertEqual(api_env['HARNESS_ENABLED']['value'], 'true')
+        self.assertFalse(api['properties']['configuration']['ingress']['external'])
+        self.assertEqual(worker_env['DATABASE_URL']['secretRef'], 'worker-database-url')
+        self.assertEqual(worker_env['LINE_DOWNLOAD_ACCESS_TOKEN']['secretRef'], 'download-token')
+        for key in ['ACCOUNT_HARNESS_PRIVATE_TOKEN','HARNESS_GATEWAY_PRIVATE_TOKEN','REPLY_ENCRYPTION_KEY','LINE_API_ACCESS_TOKEN','AUDIT_HARNESS_TOKEN']:
+            self.assertNotIn(key, worker_env)
+        config = job['properties']['configuration']
+        self.assertEqual(config['eventTriggerConfig']['scale']['maxExecutions'], 1)
+        rule = config['eventTriggerConfig']['scale']['rules'][0]
+        self.assertEqual(rule['metadata']['queueName'], 'hhc-line-harness-wakes')
+        self.assertTrue(rule['identity'].endswith('/hhc-line-harness-worker'))
+        self.assertEqual(config['replicaRetryLimit'], 0)
+        for bad in [{}, dict(settings, LINE_BOT_ID='invalid'), dict(settings, EXTRA='injected')]:
+            with self.assertRaises(ValueError): release.render('api', IMAGE, secrets, bad)
+        with self.assertRaises(ValueError): release.render('worker', IMAGE, secrets)
+        with self.assertRaises(ValueError): release.render('api', IMAGE, dict(secrets, **{'account-token': secrets['gateway-token']}), settings)
+
+    def test_worker_receipt_requires_scoped_deployment_and_actual_readback(self):
+        secrets = dict(SECRETS)
+        for key in ['worker-database-url', 'download-token']:
+            secrets[key] = 'https://alive-vault.vault.azure.net/secrets/hhc-line-harness-' + key + '/' + 'b'*32
+        settings = {'LINE_CHANNEL_ID':'U'+'a'*32, 'LINE_BOT_ID':'U'+'a'*32, 'LINE_LOGIN_CHANNEL_ID':'1234', 'HARNESS_RUNTIME_GENERATION':'2'}
+        calls = []
+        expected = release.render('worker', IMAGE, secrets, settings)['resources'][0]
+        def fake_az(*args):
+            calls.append(args)
+            if args == ('account','show'): return {'id':release.SUBSCRIPTION}
+            if 'list' in args: return []
+            if args[:3] == ('deployment','group','what-if'):
+                return {'status':'Succeeded','changes':[{'resourceId':release.resource_id('worker'),'changeType':'Create'}]}
+            if args[:3] == ('deployment','group','create'): return {}
+            if args[:3] == ('containerapp','job','show'): return expected
+            raise AssertionError(args)
+        with patch.object(release, 'az', fake_az): release.deploy('worker', IMAGE, secrets, settings)
+        self.assertTrue(any(c[:3] == ('deployment','group','create') for c in calls))
+        self.assertEqual(calls[-1][:3], ('containerapp','job','show'))
+
     def test_api_provider_normalization_preserves_all_probe_and_ingress_checks(self):
         expected = release.render('api', IMAGE, SECRETS)['resources'][0]
         actual = json.loads(json.dumps(expected))
@@ -85,6 +131,35 @@ class ReleaseTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'admitted'):
                     release.deploy('migrate', IMAGE, SECRETS)
             self.assertFalse(any('deployment' in c or 'start' in c for c in calls))
+
+    def test_enabled_queue_worker_fences_migration_before_cloud_write(self):
+        def fake_az(*args):
+            if args == ('account', 'show'): return {'id': release.SUBSCRIPTION}
+            if args == ('containerapp', 'list', '-g', release.GROUP): return []
+            if args == ('containerapp', 'job', 'list', '-g', release.GROUP):
+                return [{'name':'hhc-line-harness-worker','properties':{'template':{'containers':[{'env':[{'name':'HARNESS_ENABLED','value':'true'}]}]}}}]
+            raise AssertionError('unexpected write: '+str(args))
+        with patch.object(release, 'az', fake_az), self.assertRaisesRegex(ValueError, 'worker'):
+            release.deploy('migrate', IMAGE, SECRETS)
+
+    def test_disabled_worker_must_also_be_drained_before_migration(self):
+        for status in ['Running', 'Processing', 'Unknown', 'Succeeded', 'Failed', 'Stopped']:
+            calls = []
+            def fake_az(*args):
+                calls.append(args)
+                if args == ('account', 'show'): return {'id': release.SUBSCRIPTION}
+                if args == ('containerapp', 'list', '-g', release.GROUP): return []
+                if args == ('containerapp', 'job', 'list', '-g', release.GROUP):
+                    return [{'name':'hhc-line-harness-worker','properties':{'template':{'containers':[{'env':[{'name':'HARNESS_ENABLED','value':'false'}]}]}}}]
+                if args[:3] == ('containerapp','job','execution'):
+                    return [{'properties':{'status':status}}]
+                if args[:3] == ('deployment','group','what-if'):
+                    raise ValueError('reached scoped preview')
+                raise AssertionError('unexpected write: '+str(args))
+            expected = 'reached scoped preview' if status in ['Succeeded','Failed','Stopped'] else 'worker execution still active'
+            with self.subTest(status=status), patch.object(release, 'az', fake_az), self.assertRaisesRegex(ValueError, expected):
+                release.deploy('migrate', IMAGE, SECRETS)
+            self.assertFalse(any('create' in c or 'start' in c for c in calls))
 
     def test_admitted_api_fences_migration_before_any_cloud_write(self):
         calls = []

@@ -1,6 +1,11 @@
-name: Release closed Harness
+name: Release Harness
 on:
   workflow_dispatch:
+    inputs:
+      serving:
+        description: Configure the API and its isolated queue worker; database admission and webhook remain separate.
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -69,6 +74,9 @@ jobs:
       id-token: write
     env:
       IMAGE: ${{ needs.publish.outputs.image }}
+      SERVING: ${{ inputs.serving }}
+      RUNTIME_SECRET_URIS: ${{ vars.RUNTIME_SECRET_URIS }}
+      LINE_RUNTIME_IDENTITIES: ${{ vars.LINE_RUNTIME_IDENTITIES }}
       API_DATABASE_SECRET_URI: ${{ vars.API_DATABASE_SECRET_URI }}
       MIGRATE_DATABASE_SECRET_URI: ${{ vars.MIGRATE_DATABASE_SECRET_URI }}
       LINE_CHANNEL_SECRET_URI: ${{ vars.LINE_CHANNEL_SECRET_URI }}
@@ -84,9 +92,13 @@ jobs:
       - name: Deploy and verify bounded migration
         shell: bash
         run: python3 scripts/closed-release.py migrate "$IMAGE" | tee migration-receipt.json
-      - name: Deploy and verify private closed API
+      - name: Deploy and verify private API
         shell: bash
         run: python3 scripts/closed-release.py api "$IMAGE" | tee api-receipt.json
+      - name: Deploy and verify isolated queue worker
+        if: inputs.serving
+        shell: bash
+        run: python3 scripts/closed-release.py worker "$IMAGE" | tee worker-receipt.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
