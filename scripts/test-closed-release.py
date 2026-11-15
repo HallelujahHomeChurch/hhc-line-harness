@@ -14,6 +14,18 @@ SECRETS = {k: 'https://alive-vault.vault.azure.net/secrets/hhc-line-harness-' + 
 ROOT = '/subscriptions/3765a72c-2c30-492c-8b88-7a26522903f8/resourceGroups/hhc-line-harness/providers/Microsoft.App/'
 
 class ReleaseTest(unittest.TestCase):
+    def test_identity_resource_ids_ignore_casing_but_reject_other_identities(self):
+        for stage in ['api', 'migrate']:
+            expected = release.render(stage, IMAGE, SECRETS)['resources'][0]
+            actual = json.loads(json.dumps(expected))
+            identity = next(iter(expected['identity']['userAssignedIdentities']))
+            actual['identity']['userAssignedIdentities'] = {identity.lower(): {'clientId': 'provider-metadata'}}
+            release.verify(actual, expected)
+            for identities in [{identity.lower() + '-other': {}}, {identity.lower(): {}, identity + '-other': {}}]:
+                actual['identity']['userAssignedIdentities'] = identities
+                with self.assertRaisesRegex(ValueError, 'identity mismatch'):
+                    release.verify(actual, expected)
+
     def test_cli_preview_uses_json_and_rejects_writes_outside_target(self):
         for stage in ['api', 'migrate']:
             def fake_output(args):
