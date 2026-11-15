@@ -124,7 +124,7 @@ def deploy(stage, image, secrets):
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / 'runtime.json'
         path.write_text(json.dumps(manifest))
-        preview = az('deployment', 'group', 'what-if', '-g', GROUP, '--template-file', str(path), '--result-format', 'FullResourcePayloads')
+        preview = az('deployment', 'group', 'what-if', '-g', GROUP, '--template-file', str(path), '--result-format', 'FullResourcePayloads', '--no-pretty-print')
         check_preview(preview, stage)
         az('deployment', 'group', 'create', '-g', GROUP, '-n', 'harness-closed-' + stage,
            '--mode', 'Incremental', '--template-file', str(path))
