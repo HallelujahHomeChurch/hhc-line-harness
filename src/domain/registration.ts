@@ -7,6 +7,7 @@ export interface AdminAuthority {
   allowed: boolean;
   bound: boolean;
   actorUserId?: string;
+  lineUserId?: string;
   bindingGeneration?: number;
   adminAuthorizationRevision?: number;
 }

@@ -163,6 +163,26 @@
       "metadataClassification": "internal",
       "retentionClass": "security",
       "metadataSchema": "line_source_revision"
+    },
+    {
+      "action": "line.source.retained_revalidate",
+      "sourceService": "hhc-line-harness",
+      "category": "line",
+      "resourceOwnerService": "hhc-line-harness",
+      "resourceType": "line_source",
+      "resourceIdGrammar": "retained_source_uuid",
+      "actorTypes": [
+        "user"
+      ],
+      "actorIdGrammar": "user=account_uuid; anonymous=empty; service=servicePrincipals",
+      "servicePrincipals": [],
+      "eventIdGrammar": "uuid",
+      "identityStrategy": "mutation_uuid_v4",
+      "outcome": "success",
+      "severity": "info",
+      "metadataClassification": "internal",
+      "retentionClass": "security",
+      "metadataSchema": "line_source_revision"
     }
   ],
   "metadataSchemas": {
@@ -224,6 +244,7 @@
     "asset_hex": "^[0-9a-f]{32}$",
     "empty": "exact empty string",
     "request": "[A-Za-z0-9._:-]{1,128}; reject net.ParseIP literals and credentialFixtures predicate",
+    "retained_source_uuid": "^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
     "uuid": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
   },
   "denialBindings": [],
@@ -409,6 +430,63 @@
         "valid": false
       }
     ],
+    "retained_source_uuid": [
+      {
+        "case": "valid-v4",
+        "value": "018f47d2-e5d1-4f3f-8f18-6c8e32621f73",
+        "valid": true
+      },
+      {
+        "case": "valid-v7",
+        "value": "018f47d2-e5d1-7f3f-8f18-6c8e32621f73",
+        "valid": true
+      },
+      {
+        "case": "valid-v1",
+        "value": "018f47d2-e5d1-1f3f-8f18-6c8e32621f73",
+        "valid": true
+      },
+      {
+        "case": "valid-v8",
+        "value": "018f47d2-e5d1-8f3f-8f18-6c8e32621f73",
+        "valid": true
+      },
+      {
+        "case": "nil",
+        "value": "00000000-0000-0000-0000-000000000000",
+        "valid": true
+      },
+      {
+        "case": "max",
+        "value": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+        "valid": true
+      },
+      {
+        "case": "case",
+        "value": "018F47D2-E5D1-7F3F-8F18-6C8E32621F73",
+        "valid": false
+      },
+      {
+        "case": "hyphen",
+        "value": "018f47d2e5d17f3f8f186c8e32621f73",
+        "valid": false
+      },
+      {
+        "case": "version",
+        "value": "018f47d2-e5d1-9f3f-8f18-6c8e32621f73",
+        "valid": false
+      },
+      {
+        "case": "variant",
+        "value": "018f47d2-e5d1-7f3f-cf18-6c8e32621f73",
+        "valid": false
+      },
+      {
+        "case": "empty",
+        "value": "",
+        "valid": false
+      }
+    ],
     "uuid": [
       {
         "case": "valid-v4",
@@ -458,5 +536,5 @@
     ]
   },
   "identityFixtures": [],
-  "checksum": "sha256:64967d980d1e0679d0d92cd9e48ed433d389e5c6b4bf602ebd9dc51ac830d1c3"
+  "checksum": "sha256:a1f230f0a8694be19eb208e2152d8ccef586d6b3aa1aac49f65a3721e389de94"
 }

@@ -13,6 +13,8 @@ export function managementRoutes(
   const routes = [
     ["GET", `${prefix}/groups`],
     ["POST", `${prefix}/groups/search`],
+    ["POST", `${prefix}/retained-groups/search`],
+    ["POST", `${prefix}/retained-groups/revalidate`],
     ["GET", `${prefix}/groups/:id/readers`],
     ["POST", `${prefix}/groups/:id/readers/revoke-preview`],
     ["POST", `${prefix}/subjects/search`],
@@ -54,6 +56,10 @@ export function managementRoutes(
               .send({ error: "invalid_management_request" });
           }
         try {
+          if (url === `${prefix}/retained-groups/search`)
+            return await management.retainedGroups(actor, body);
+          if (url === `${prefix}/retained-groups/revalidate`)
+            return await management.revalidateRetainedGroup(actor, body);
           if (url === `${prefix}/groups/search`) {
             if (
               Object.keys(body).some((k) => k !== "cursor") ||
@@ -194,7 +200,9 @@ export function managementRoutes(
         } catch (e) {
           const code = e instanceof Error ? e.message : "";
           const status =
-            code === "admin_required" || code === "admin_binding_required"
+            code === "admin_required" ||
+            code === "admin_binding_required" ||
+            code === "retained_membership_required"
               ? 403
               : code === "setup_expired_or_changed" ||
                   code === "management_changed"

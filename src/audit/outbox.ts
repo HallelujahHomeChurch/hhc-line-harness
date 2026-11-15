@@ -6,6 +6,11 @@ const uuid = z
   .regex(
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   );
+const retainedSourceId = z
+  .string()
+  .regex(
+    /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/,
+  );
 const actor = z
   .string()
   .regex(
@@ -20,6 +25,7 @@ export const auditActions = [
   "line.group.acl_revoke",
   "line.source.description",
   "line.source.delete",
+  "line.source.retained_revalidate",
 ] as const;
 const revision = z
   .string()
@@ -38,7 +44,7 @@ export const auditEventSchema = z
     category: z.literal("line"),
     resourceOwnerService: z.literal("hhc-line-harness"),
     resourceType: z.enum(["line_group", "line_source"]),
-    resourceId: uuid,
+    resourceId: retainedSourceId,
     outcome: z.literal("success"),
     severity: z.literal("info"),
     metadataClassification: z.literal("internal"),
@@ -55,6 +61,18 @@ export const auditEventSchema = z
   })
   .strict()
   .refine((e) => {
+    if (
+      e.action !== "line.source.retained_revalidate" &&
+      !uuid.safeParse(e.resourceId).success
+    )
+      return false;
+    if (
+      e.action === "line.source.retained_revalidate" &&
+      (e.actorType !== "user" ||
+        !("actorKind" in e.metadata) ||
+        e.metadata.actorKind !== "website_admin")
+    )
+      return false;
     if (e.action.startsWith("line.group."))
       return (
         e.resourceType === "line_group" &&
@@ -77,7 +95,7 @@ export function auditEvent(value: unknown): AuditEvent {
       id: uuid,
       action: z.enum(auditActions),
       actor_user_id: actor.nullable(),
-      target_id: uuid,
+      target_id: retainedSourceId,
       target_revision: revision,
       occurred_at: z.date(),
     })

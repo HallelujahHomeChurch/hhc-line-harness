@@ -60,10 +60,18 @@ export class AccountClient {
           Number(r.bindingGeneration) <= 0))
     )
       throw new Error("dependency_unavailable");
+    if (
+      r.lineUserId !== undefined &&
+      (typeof r.lineUserId !== "string" ||
+        !/^U[0-9a-f]{32}$/.test(r.lineUserId) ||
+        !r.bound)
+    )
+      throw new Error("dependency_unavailable");
     return {
       allowed: true,
       bound: r.bound,
       actorUserId: r.actorUserId,
+      ...(typeof r.lineUserId === "string" ? { lineUserId: r.lineUserId } : {}),
       adminAuthorizationRevision: Number(r.adminAuthorizationRevision),
       ...(r.bound ? { bindingGeneration: Number(r.bindingGeneration) } : {}),
     };

@@ -202,3 +202,38 @@ test(
     );
   },
 );
+
+test("retained audit identity exactly matches receiver fixtures without widening existing actions", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const fixture = JSON.parse(
+    await readFile("docs/audit-producer-fixture.json", "utf8"),
+  );
+  const { auditEventSchema } = await import("../src/audit/outbox.ts");
+  for (const f of fixture.grammarFixtures.retained_source_uuid) {
+    const row = {
+      id: randomUUID(),
+      action: "line.source.retained_revalidate",
+      actor_user_id: user,
+      target_id: f.value,
+      target_revision: "2",
+      occurred_at: new Date(),
+    };
+    if (f.valid) {
+      const e = auditEvent(row);
+      assert.equal(e.resourceId, f.value);
+      assert.equal(
+        auditEventSchema.safeParse({
+          ...e,
+          actorType: "anonymous",
+          actorId: "",
+          metadata: { revision: "2", actorKind: "line_author" },
+        }).success,
+        false,
+      );
+      if (!/^.{14}4/.test(f.value))
+        assert.throws(() =>
+          auditEvent({ ...row, action: "line.source.delete" }),
+        );
+    } else assert.throws(() => auditEvent(row));
+  }
+});
