@@ -1,3 +1,7 @@
+import {
+  managedAssetToken,
+  type AssetCredential,
+} from "../providers/asset-auth.ts";
 import { AuditClient } from "../audit/outbox.ts";
 import { loadEmbeddingConfig } from "../providers/embeddings.ts";
 import { loadAgentConfig } from "../agent/providers.ts";
@@ -8,7 +12,7 @@ export interface WorkerConfig {
   channelId: string;
   lineDownloadToken: string;
   assetOrigin: string;
-  assetToken: string;
+  assetToken: AssetCredential;
   uploadOrigins: string[];
   queueUrl: string;
   identityClientId: string;
@@ -43,7 +47,10 @@ function shared(env: NodeJS.ProcessEnv) {
     runtimeGeneration: env.HARNESS_RUNTIME_GENERATION ?? "1",
     channelId: required(env, "LINE_CHANNEL_ID"),
     assetOrigin: required(env, "ASSET_API_ORIGIN"),
-    assetToken: required(env, "ASSET_WORKLOAD_TOKEN"),
+    assetToken: managedAssetToken(
+      required(env, "AZURE_CLIENT_ID"),
+      required(env, "ASSET_WORKLOAD_AUDIENCE"),
+    ),
     queueUrl: required(env, "HARNESS_QUEUE_URL"),
     identityClientId: required(env, "AZURE_CLIENT_ID"),
   };

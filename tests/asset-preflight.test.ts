@@ -13,7 +13,7 @@ test("preflight uses only explicit workload credentials and the exact read-only 
       );
       assert.equal(init?.method, "POST");
       assert.equal(init?.redirect, "error");
-      assert.deepEqual(init?.headers, {
+      assert.deepEqual(Object.fromEntries(new Headers(init?.headers)), {
         "content-type": "application/json",
         "x-hhc-workload-authorization": "Bearer synthetic-token",
       });

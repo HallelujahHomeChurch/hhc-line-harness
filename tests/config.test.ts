@@ -42,12 +42,13 @@ test("runtime is opt-in and worker config does not need reply or Account credent
     LINE_CHANNEL_ID: "channel",
     LINE_DOWNLOAD_ACCESS_TOKEN: "download-token",
     ASSET_API_ORIGIN: "https://asset.invalid",
-    ASSET_WORKLOAD_TOKEN: "asset-token",
+    ASSET_WORKLOAD_AUDIENCE: "api://22222222-2222-4222-8222-222222222222",
     ASSET_UPLOAD_ORIGINS: "https://blob.invalid",
     HARNESS_QUEUE_URL: "https://fixture.queue.core.windows.net/harness",
     AZURE_CLIENT_ID: "11111111-1111-4111-8111-111111111111",
   });
   assert.equal(config.channelId, "channel");
+  assert.equal(typeof config.assetToken, "function");
   assert.equal("replyEncryptionKey" in config, false);
   assert.equal("accountToken" in config, false);
 });
@@ -59,7 +60,7 @@ test("Audit delivery requires paired HTTPS config and a distinct private credent
     LINE_CHANNEL_SECRET: "synthetic",
     LINE_CHANNEL_ID: "channel",
     ASSET_API_ORIGIN: "https://asset.invalid",
-    ASSET_WORKLOAD_TOKEN: "asset-token",
+    ASSET_WORKLOAD_AUDIENCE: "api://22222222-2222-4222-8222-222222222222",
     HARNESS_QUEUE_URL: "https://fixture.queue.core.windows.net/harness",
     AZURE_CLIENT_ID: "11111111-1111-4111-8111-111111111111",
     LINE_BOT_ID: `U${"a".repeat(32)}`,

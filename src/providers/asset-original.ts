@@ -1,3 +1,4 @@
+import { assetHeaders, type AssetCredential } from "./asset-auth.ts";
 import { isAssetId } from "../domain/asset-id.ts";
 import type { ContentHeaders } from "../domain/protected-content.ts";
 import { Readable } from "node:stream";
@@ -16,17 +17,12 @@ export class AssetOriginalClient {
   readonly uploadOrigins: Set<string>;
   constructor(
     origin: string,
-    token: string,
+    token: AssetCredential,
     uploadOrigins: string[],
     fetcher: typeof fetch = fetch,
   ) {
-    if (!/^[A-Za-z0-9._~-]+$/.test(token) || !uploadOrigins.length)
-      throw new Error("invalid_asset_config");
-    this.http = new ServiceClient(
-      origin,
-      { "X-HHC-Workload-Authorization": `Bearer ${token}` },
-      fetcher,
-    );
+    if (!uploadOrigins.length) throw new Error("invalid_asset_config");
+    this.http = new ServiceClient(origin, assetHeaders(token), fetcher);
     this.uploadOrigins = new Set(
       uploadOrigins.map((value) => {
         const u = new URL(value);
@@ -197,14 +193,16 @@ export class AssetOriginalClient {
       !/^bytes=(?:[0-9]+-[0-9]*|-[0-9]+)$/.test(headers.range)
     )
       throw new Error("invalid_range");
+    const signal = AbortSignal.timeout(30_000);
+    const authorization = await this.http.requestHeaders(signal);
     return this.http.fetcher(
       new URL(`/priv/assets/${id}/source-content`, this.http.origin),
       {
         method,
         redirect: "error",
-        signal: AbortSignal.timeout(30_000),
+        signal,
         headers: {
-          ...this.http.headers,
+          ...authorization,
           ...(headers.range ? { Range: headers.range } : {}),
           ...(headers.etag ? { "If-None-Match": headers.etag } : {}),
           ...(headers.modifiedSince
