@@ -1,5 +1,9 @@
 SELECT pg_advisory_xact_lock(hashtextextended('harness:vector-extension',0));
-CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_extension WHERE extname='vector') THEN
+    CREATE EXTENSION vector WITH SCHEMA public;
+  END IF;
+END $$;
 CREATE TABLE embedding_versions (
  id text PRIMARY KEY,
  channel_id text NOT NULL,

@@ -30,6 +30,13 @@ try:
     assert sql("SELECT count(*) FROM pg_tables WHERE schemaname='public';").stdout.strip() == '0', 'partial bootstrap left tables behind'
     assert sql(script).returncode == 0, 'bootstrap failed'
     assert sql(script).returncode != 0, 'repeat bootstrap must not rotate passwords'
+    # Managed PostgreSQL can reject extension DDL even when IF NOT EXISTS is a no-op.
+    assert sql("""CREATE FUNCTION fixture_extension_owner() RETURNS event_trigger LANGUAGE plpgsql AS $$
+      BEGIN IF current_user='hhc_line_harness_migrate' THEN
+        RAISE insufficient_privilege USING MESSAGE='fixture_extension_owner';
+      END IF; END $$;
+      CREATE EVENT TRIGGER fixture_extension_owner ON ddl_command_start
+      WHEN TAG IN ('CREATE EXTENSION') EXECUTE FUNCTION fixture_extension_owner();""").returncode == 0
     limits = sql("SELECT rolname||':'||rolconnlimit FROM pg_roles WHERE rolname LIKE 'hhc_line_harness_%' ORDER BY rolname;")
     assert limits.stdout.strip().splitlines() == ['hhc_line_harness_api:16','hhc_line_harness_migrate:1','hhc_line_harness_worker:3']
     address = run('docker','inspect','--format','{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}',name).stdout.strip()
