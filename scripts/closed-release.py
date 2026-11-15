@@ -82,7 +82,8 @@ def az(*args):
     return json.loads(subprocess.check_output(['az', *args, '--only-show-errors', '-o', 'json']))
 
 def verify(actual, expected):
-    if actual['identity']['type'] != 'UserAssigned' or set(actual['identity']['userAssignedIdentities']) != set(expected['identity']['userAssignedIdentities']):
+    # Azure normalizes resource ID casing in identity readback.
+    if actual['identity']['type'] != 'UserAssigned' or {key.lower() for key in actual['identity']['userAssignedIdentities']} != {key.lower() for key in expected['identity']['userAssignedIdentities']}:
         raise ValueError('runtime identity mismatch')
     # Azure adds read-only defaults. Every declared security/configuration value must survive readback.
     def contains(value, wanted):
