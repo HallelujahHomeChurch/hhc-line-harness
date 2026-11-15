@@ -332,3 +332,50 @@ test("publication names match owner-validated Unicode fixtures without altering 
     assert.equal(source.file_name, row.input);
   }
 });
+
+test("Account subject authority preserves optional linked actor and rejects malformed linked identity", async () => {
+  const actor = "11111111-1111-7111-8111-111111111111",
+    line = "U" + "a".repeat(32);
+  let response: Record<string, unknown> = {
+    version: 1,
+    allowed: true,
+    bound: true,
+    actorUserId: actor,
+    bindingGeneration: 1,
+    adminAuthorizationRevision: 2,
+    lineUserId: line,
+  };
+  const client = new AccountClient(
+    "https://account.invalid",
+    "a".repeat(64),
+    "helper",
+    "channel",
+    async (_url, init) => {
+      assert.deepEqual(JSON.parse(String(init?.body)), { userId: actor });
+      return Response.json(response);
+    },
+  );
+  assert.equal((await client.subjectAuthority(actor)).lineUserId, line);
+  for (const invalid of [
+    null,
+    123,
+    "U" + "z".repeat(32),
+    "C" + "a".repeat(32),
+  ]) {
+    response.lineUserId = invalid;
+    await assert.rejects(
+      client.subjectAuthority(actor),
+      /dependency_unavailable/,
+    );
+  }
+  delete response.lineUserId;
+  assert.equal((await client.subjectAuthority(actor)).lineUserId, undefined);
+  response.bound = false;
+  delete response.bindingGeneration;
+  assert.equal((await client.subjectAuthority(actor)).allowed, true);
+  response.lineUserId = line;
+  await assert.rejects(
+    client.subjectAuthority(actor),
+    /dependency_unavailable/,
+  );
+});

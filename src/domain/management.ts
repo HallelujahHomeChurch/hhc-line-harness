@@ -1,3 +1,5 @@
+import { z } from "zod";
+import type { Pool, PoolClient } from "pg";
 import { isAssetId } from "./asset-id.ts";
 import { createHash, randomBytes } from "node:crypto";
 import type { Store, InteractionFence } from "../persistence/store.ts";
@@ -7,6 +9,20 @@ const uuid = (s: string) =>
     s,
   );
 const digest = (s: string) => createHash("sha256").update(s).digest("hex");
+const retainedGroupId = z.string().regex(/^C[0-9a-f]{32}$/);
+const retainedRevision = z
+  .string()
+  .refine(
+    (v) => /^[1-9][0-9]{0,18}$/.test(v) && BigInt(v) <= 9223372036854775807n,
+  );
+const retainedRequest = z
+  .object({
+    lineGroupId: retainedGroupId,
+    manifestDigest: z.string().regex(/^[0-9a-f]{64}$/),
+    generation: retainedRevision,
+    expectedRevision: retainedRevision,
+  })
+  .strict();
 export class Management {
   readonly store: Store;
   readonly registration: Registration;
@@ -60,6 +76,154 @@ export class Management {
     )
       throw Error("admin_required");
     return a;
+  }
+  async retainedGroups(actor: string, input: unknown) {
+    await this.admin(actor);
+    const parsed = z
+      .object({ cursor: retainedGroupId.optional() })
+      .strict()
+      .safeParse(input);
+    if (!parsed.success) throw Error("invalid_management_request");
+    const row = (
+      await this.store.pool.query<{
+        generation: string;
+        manifestDigest: string | null;
+        revision: string | null;
+        ready: boolean;
+        groups: {
+          lineGroupId: string;
+          sourceCount: number;
+          blocked: boolean;
+          publishedFrom: string;
+          publishedTo: string;
+        }[];
+      }>(
+        `SELECT r.generation::text AS generation,h.manifest_digest AS "manifestDigest",h.revision::text AS revision,
+      COALESCE(r.mode IN ('open','closed') AND h.state IN ('frozen','active') AND h.generation=r.generation
+        AND NOT EXISTS(SELECT 1 FROM recovery_records x WHERE x.generation=r.generation AND x.reconciled_at IS NULL),false) AS ready,
+      COALESCE((SELECT jsonb_agg(g ORDER BY g."lineGroupId") FROM (
+        SELECT manifest->>'groupId' AS "lineGroupId",count(*)::int AS "sourceCount",bool_or(group_blocked) AS blocked,
+          min((manifest->>'publishedAt')::timestamptz) AS "publishedFrom",max((manifest->>'publishedAt')::timestamptz) AS "publishedTo"
+        FROM legacy_sources WHERE channel_id=$1 AND ($2::text IS NULL OR manifest->>'groupId'>$2)
+        GROUP BY manifest->>'groupId' ORDER BY manifest->>'groupId' LIMIT 21
+      ) g),'[]'::jsonb) AS groups
+      FROM runtime_state r LEFT JOIN legacy_handoffs h ON h.channel_id=$1`,
+        [this.store.channelId, parsed.data.cursor ?? null],
+      )
+    ).rows[0];
+    if (!row) throw Error("management_unavailable");
+    const hasMore = row.groups.length > 20;
+    const groups = await Promise.all(
+      row.groups.slice(0, 20).map(async (g) => ({
+        ...g,
+        displayName:
+          (await this.registration.ports
+            .groupName?.(g.lineGroupId)
+            .catch(() => null)) ?? null,
+      })),
+    );
+    return {
+      ...row,
+      groups,
+      hasMore,
+      ...(hasMore ? { cursor: groups.at(-1)!.lineGroupId } : {}),
+    };
+  }
+  async revalidateRetainedGroup(actor: string, input: unknown) {
+    const parsed = retainedRequest.safeParse(input);
+    if (!parsed.success) throw Error("invalid_management_request");
+    const request = parsed.data;
+    const first = await this.admin(actor);
+    if (
+      !first.bound ||
+      !/^U[0-9a-f]{32}$/.test(first.lineUserId ?? "") ||
+      !Number.isSafeInteger(first.bindingGeneration) ||
+      Number(first.bindingGeneration) <= 0
+    )
+      throw Error("admin_binding_required");
+    const read = async (c: Pool | PoolClient) => {
+      const row = (
+        await c.query<{
+          generation: string;
+          revision: string;
+          manifest_digest: string;
+          mode: string;
+          state: string;
+          handoff_generation: string;
+          reconciled: boolean;
+          known: boolean;
+        }>(
+          `SELECT r.generation,h.revision,h.manifest_digest,r.mode,h.state,h.generation AS handoff_generation,
+          NOT EXISTS(SELECT 1 FROM recovery_records x WHERE x.generation=r.generation AND x.reconciled_at IS NULL) AS reconciled,
+          EXISTS(SELECT 1 FROM legacy_sources s WHERE s.channel_id=$1 AND s.manifest->>'groupId'=$2) AS known
+        FROM runtime_state r JOIN legacy_handoffs h ON h.channel_id=$1`,
+          [this.store.channelId, request.lineGroupId],
+        )
+      ).rows[0];
+      if (
+        !row ||
+        !row.known ||
+        !row.reconciled ||
+        !["closed", "open"].includes(row.mode) ||
+        !["frozen", "active"].includes(row.state) ||
+        row.generation !== request.generation ||
+        row.handoff_generation !== request.generation ||
+        row.manifest_digest !== request.manifestDigest ||
+        row.revision !== request.expectedRevision
+      )
+        throw Error("management_changed");
+    };
+    await read(this.store.pool);
+    if (!this.registration.ports.groupName)
+      throw Error("management_unavailable");
+    if (
+      !(await this.registration.ports.member(
+        request.lineGroupId,
+        first.lineUserId!,
+      ))
+    )
+      throw Error("retained_membership_required");
+    await this.registration.ports.groupName(request.lineGroupId);
+    return this.store.transaction(async (c) => {
+      await c.query("SELECT generation FROM runtime_state FOR SHARE");
+      await c.query(
+        "SELECT channel_id FROM legacy_handoffs WHERE channel_id=$1 FOR UPDATE",
+        [this.store.channelId],
+      );
+      const sources = await c.query(
+        "SELECT id FROM legacy_sources WHERE channel_id=$1 AND manifest->>'groupId'=$2 ORDER BY id LIMIT 10001 FOR UPDATE",
+        [this.store.channelId, request.lineGroupId],
+      );
+      if (sources.rows.length > 10000) throw Error("management_unavailable");
+      await read(c);
+      const final = await this.admin(actor);
+      if (
+        !final.bound ||
+        final.lineUserId !== first.lineUserId ||
+        final.bindingGeneration !== first.bindingGeneration ||
+        final.adminAuthorizationRevision !== first.adminAuthorizationRevision
+      )
+        throw Error("management_changed");
+      const audit = await c.query(
+        `WITH changed AS (
+        UPDATE legacy_sources SET group_blocked=false,revision=revision+1
+        WHERE channel_id=$1 AND manifest->>'groupId'=$2 AND group_blocked RETURNING id,revision
+      ) INSERT INTO audit_outbox(action,actor_user_id,target_id,target_revision,occurred_at,next_attempt_at)
+        SELECT 'line.source.retained_revalidate',$3,id,revision,$4,$4 FROM changed`,
+        [this.store.channelId, request.lineGroupId, actor, this.store.now()],
+      );
+      const current = (
+        await c.query<{ revision: string }>(
+          "SELECT revision FROM legacy_handoffs WHERE channel_id=$1",
+          [this.store.channelId],
+        )
+      ).rows[0]!;
+      return {
+        generation: request.generation,
+        revision: current.revision,
+        changedSourceCount: audit.rowCount ?? 0,
+      };
+    });
   }
   async collections(actor: string, cursor = "") {
     await this.admin(actor);
