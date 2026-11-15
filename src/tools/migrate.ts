@@ -1,5 +1,5 @@
 import pg from "pg";
-import { migrate } from "../persistence/migrate.ts";
+import { migrate, migrationDiagnostic } from "../persistence/migrate.ts";
 async function main() {
   if (!process.env.DATABASE_URL) throw new Error("database_url_required");
   const pool = new pg.Pool({
@@ -14,7 +14,7 @@ async function main() {
     await pool.end();
   }
 }
-main().catch(() => {
-  process.stderr.write("migration_failed\n");
+main().catch((error: unknown) => {
+  process.stderr.write(JSON.stringify(migrationDiagnostic(error)) + "\n");
   process.exitCode = 1;
 });
