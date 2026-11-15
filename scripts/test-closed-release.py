@@ -14,6 +14,29 @@ SECRETS = {k: 'https://alive-vault.vault.azure.net/secrets/hhc-line-harness-' + 
 ROOT = '/subscriptions/3765a72c-2c30-492c-8b88-7a26522903f8/resourceGroups/hhc-line-harness/providers/Microsoft.App/'
 
 class ReleaseTest(unittest.TestCase):
+    def test_api_provider_normalization_preserves_all_probe_and_ingress_checks(self):
+        expected = release.render('api', IMAGE, SECRETS)['resources'][0]
+        actual = json.loads(json.dumps(expected))
+        actual['properties']['configuration']['ingress']['transport'] = 'Http'
+        probes = actual['properties']['template']['containers'][0]['probes']
+        probes.reverse()
+        unchanged = json.dumps(actual)
+        release.verify(actual, expected)
+        self.assertEqual(json.dumps(actual), unchanged)
+        for mutation in ['transport', 'probe-period', 'duplicate-probe', 'extra-probe', 'public', 'image', 'extra-env']:
+            changed = json.loads(unchanged)
+            config = changed['properties']['configuration']
+            container = changed['properties']['template']['containers'][0]
+            if mutation == 'transport': config['ingress']['transport'] = 'tcp'
+            if mutation == 'probe-period': container['probes'][0]['periodSeconds'] += 1
+            if mutation == 'duplicate-probe': container['probes'][0] = container['probes'][1]
+            if mutation == 'extra-probe': container['probes'].append(container['probes'][0])
+            if mutation == 'public': config['ingress']['external'] = True
+            if mutation == 'image': container['image'] = IMAGE[:-1] + 'b'
+            if mutation == 'extra-env': container['env'].append({'name': 'EXTRA', 'value': 'true'})
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, 'configuration differs'):
+                release.verify(changed, expected)
+
     def test_identity_resource_ids_ignore_casing_but_reject_other_identities(self):
         for stage in ['api', 'migrate']:
             expected = release.render(stage, IMAGE, SECRETS)['resources'][0]
