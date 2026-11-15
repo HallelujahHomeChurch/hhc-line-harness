@@ -52,3 +52,9 @@ Azure Container Apps does not expose a read-only-root setting in the selected
 2025-07-01 resource schema. Docker's read-only image smoke is local evidence;
 do not claim that mount policy is enforced by ACA. Runtime remains nonroot and
 content intake stays disabled in this stage.
+
+## Configured runtime release
+
+The same manual workflow accepts `serving=true` after peer credentials and Asset policy are ready. `LINE_RUNTIME_IDENTITIES` pins the helper destination as both LINE channel scope and bot ID, the existing LINE Login channel, and the independently verified runtime generation. `RUNTIME_SECRET_URIS` supplies exact versioned Harness secret slots; secret values never enter workflow variables. The API remains private and the event worker consumes only `hhc-line-harness-wakes`, at most one execution with its own three-connection role. API credentials are not provided to the worker. Agent/embeddings remain disabled.
+
+This option does not open database admission, change the LINE webhook, import old sources or retire their cleanup owner. Migration refuses a configured API or enabled/undrained queue worker; stop/drain writers through the existing recovery procedure before later schema releases. Human LINE/mobile/Presenter acceptance follows the usable deployment; the old version and cleanup responsibilities remain available during rollback.

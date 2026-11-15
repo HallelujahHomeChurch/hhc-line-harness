@@ -1,4 +1,4 @@
-"""Narrow first closed deployment; no cloud calls during import."""
+"""Bounded Harness deployment; admission and webhook ownership stay operator-controlled."""
 import json
 import os
 import re
@@ -14,16 +14,31 @@ ROOT = f'/subscriptions/{SUBSCRIPTION}/resourceGroups/{GROUP}/providers/'
 ENVIRONMENT = f'/subscriptions/{SUBSCRIPTION}/resourceGroups/alive/providers/Microsoft.App/managedEnvironments/alive-env'
 
 def resource_id(stage):
-    if stage not in ['api', 'migrate']:
+    if stage not in ['api', 'migrate', 'worker']:
         raise ValueError('unsupported release stage')
     kind = 'containerApps' if stage == 'api' else 'jobs'
     return ROOT + f'Microsoft.App/{kind}/hhc-line-harness-{stage}'
 
-def render(stage, image, secrets):
+def render(stage, image, secrets, serving=None):
     resource_id(stage)
     if not re.fullmatch(r'alive\.azurecr\.io/hhc-line-harness@sha256:[0-9a-f]{64}', image):
         raise ValueError('expected immutable Harness image')
-    keys = ['api-database-url', 'channel-secret'] if stage == 'api' else ['migrate-database-url']
+    if serving is not None:
+        if set(serving) != {'LINE_CHANNEL_ID', 'LINE_BOT_ID', 'LINE_LOGIN_CHANNEL_ID', 'HARNESS_RUNTIME_GENERATION'} or not all(isinstance(v, str) for v in serving.values()):
+            raise ValueError('invalid serving settings')
+        if not re.fullmatch(r'U[0-9a-f]{32}', serving['LINE_BOT_ID']) or serving['LINE_CHANNEL_ID'] != serving['LINE_BOT_ID'] or not re.fullmatch(r'[0-9]{1,20}', serving['LINE_LOGIN_CHANNEL_ID']) or not re.fullmatch(r'[1-9][0-9]{0,15}', serving['HARNESS_RUNTIME_GENERATION']):
+            raise ValueError('invalid LINE identity')
+    if stage == 'worker' and serving is None:
+        raise ValueError('worker requires serving settings')
+    keys = ['api-database-url', 'channel-secret'] if stage == 'api' else [stage + '-database-url']
+    bindings = {}
+    if serving is not None and stage == 'api':
+        bindings = {'LINE_API_ACCESS_TOKEN': 'api-line-token', 'REPLY_ENCRYPTION_KEY': 'reply-key',
+                    'ASSET_SOURCE_GATE_TOKEN': 'source-gate-token', 'ACCOUNT_HARNESS_PRIVATE_TOKEN': 'account-token',
+                    'HARNESS_GATEWAY_PRIVATE_TOKEN': 'gateway-token', 'AUDIT_HARNESS_TOKEN': 'audit-token'}
+    if stage == 'worker':
+        bindings = {'LINE_DOWNLOAD_ACCESS_TOKEN': 'download-token'}
+    keys += list(bindings.values())
     for key in keys:
         if not re.fullmatch(r'https://alive-vault\.vault\.azure\.net/secrets/hhc-line-harness-' + key + r'/[0-9a-f]{32}', secrets.get(key, '')):
             raise ValueError('expected exact versioned secret slot')
@@ -32,6 +47,25 @@ def render(stage, image, secrets):
         'HARNESS_ENABLED': 'false', 'AGENT_ENABLED': 'false', 'EMBEDDING_ENABLED': 'false',
         'HARNESS_RUNTIME_GENERATION': '1', 'HOST': '0.0.0.0', 'PORT': '3000',
     }.items()]
+    if serving is not None and stage != 'migrate':
+        values = {
+            'HARNESS_ENABLED': 'true', 'LINE_CHANNEL_ID': serving['LINE_CHANNEL_ID'],
+            'HARNESS_RUNTIME_GENERATION': serving['HARNESS_RUNTIME_GENERATION'],
+            'ASSET_API_ORIGIN': 'https://asset-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io',
+            'ASSET_WORKLOAD_AUDIENCE': 'api://603d78de-1f3e-448f-b716-0a4ffaa58887',
+            'HARNESS_QUEUE_URL': 'https://alivestoragebb99ee6e.queue.core.windows.net/hhc-line-harness-wakes',
+            'AZURE_CLIENT_ID': '3d69ffef-71f7-4743-ad87-184a4aa472a5' if stage == 'api' else '90d03d34-cd52-49dd-a828-c10d91015585',
+        }
+        if stage == 'api':
+            values.update(serving)
+            values.update({'LINE_HARNESS_PROFILE': 'helper', 'ADMIN_ORIGIN': 'https://admin.alive.org.tw',
+                'ACCOUNT_API_ORIGIN': 'https://account-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io',
+                'AUDIT_API_ORIGIN': 'https://audit-log.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io'})
+        else:
+            values['ASSET_UPLOAD_ORIGINS'] = 'https://alivestoragebb99ee6e.blob.core.windows.net'
+        env = [entry for entry in env if entry['name'] not in values]
+        env += [{'name': name, 'value': value} for name, value in values.items()]
+        env += [{'name': name, 'secretRef': key} for name, key in bindings.items()]
     env.append({'name': 'DATABASE_URL', 'secretRef': keys[0]})
     container = {'name': 'harness', 'image': image, 'env': env,
                  'resources': {'cpu': 0.25, 'memory': '0.5Gi'}}
@@ -55,6 +89,14 @@ def render(stage, image, secrets):
         config.update({'triggerType': 'Manual', 'replicaTimeout': 300, 'replicaRetryLimit': 0,
                        'manualTriggerConfig': {'parallelism': 1, 'replicaCompletionCount': 1}})
         container['command'] = ['node', 'dist/src/tools/migrate.js']
+        if stage == 'worker':
+            config.pop('manualTriggerConfig')
+            config.update({'triggerType': 'Event', 'replicaTimeout': 660,
+                'eventTriggerConfig': {'parallelism': 1, 'replicaCompletionCount': 1,
+                    'scale': {'pollingInterval': 10, 'minExecutions': 0, 'maxExecutions': 1,
+                        'rules': [{'name': 'harness-wakes', 'type': 'azure-queue', 'identity': identity,
+                            'metadata': {'accountName': 'alivestoragebb99ee6e', 'queueName': 'hhc-line-harness-wakes', 'queueLength': '1'}}]}}})
+            container['command'] = ['node', 'dist/src/worker.js']
     resource = {'type': 'Microsoft.App/' + ('containerApps' if stage == 'api' else 'jobs'),
                 'apiVersion': '2025-07-01', 'name': 'hhc-line-harness-' + stage,
                 'location': 'eastasia', 'identity': {'type': 'UserAssigned', 'userAssignedIdentities': {identity: {}}},
@@ -105,12 +147,12 @@ def verify(actual, expected):
     if not contains(actual['properties'], expected['properties']):
         raise ValueError('runtime configuration differs from reviewed manifest')
 
-def deploy(stage, image, secrets):
+def deploy(stage, image, secrets, serving=None):
     if az('account', 'show')['id'] != SUBSCRIPTION:
         raise ValueError('wrong subscription')
-    manifest = render(stage, image, secrets)
+    manifest = render(stage, image, secrets, serving)
     for app in az('containerapp', 'list', '-g', GROUP):
-        if app['name'] == 'hhc-line-harness-api':
+        if app['name'] == 'hhc-line-harness-api' and (stage == 'migrate' or serving is None):
             entries = app['properties']['template']['containers'][0]['env']
             if {x['name']: x.get('value') for x in entries}.get('HARNESS_ENABLED') != 'false':
                 raise ValueError('closed bootstrap cannot migrate an admitted runtime')
@@ -122,9 +164,18 @@ def deploy(stage, image, secrets):
                         raise ValueError('closed bootstrap cannot migrate an admitted revision')
     expected = manifest['resources'][0]
     name = expected['name']
-    command = ['containerapp'] + (['job'] if stage == 'migrate' else [])
-    existing = [x for x in az(*command, 'list', '-g', GROUP) if x['name'] == name]
-    if existing:
+    command = ['containerapp'] + (['job'] if stage != 'api' else [])
+    resources = az(*command, 'list', '-g', GROUP)
+    if stage == 'migrate':
+        for job in resources:
+            if job['name'] == 'hhc-line-harness-worker':
+                entries = job['properties']['template']['containers'][0]['env']
+                if {x['name']: x.get('value') for x in entries}.get('HARNESS_ENABLED') != 'false':
+                    raise ValueError('stop and drain the queue worker before migration')
+                if any(x['properties']['status'] not in ['Succeeded', 'Failed', 'Stopped'] for x in az('containerapp', 'job', 'execution', 'list', '-g', GROUP, '-n', job['name'])):
+                    raise ValueError('queue worker execution still active')
+    existing = [x for x in resources if x['name'] == name]
+    if existing and (stage == 'migrate' or serving is None):
         container = existing[0]['properties']['template']['containers'][0]
         if {x['name']: x.get('value') for x in container['env']}.get('HARNESS_ENABLED') != 'false':
             raise ValueError('closed bootstrap cannot replace an admitted runtime')
@@ -141,6 +192,8 @@ def deploy(stage, image, secrets):
            '--mode', 'Incremental', '--template-file', str(path))
     actual = az(*command, 'show', '-g', GROUP, '-n', name)
     verify(actual, expected)
+    if stage == 'worker':
+        print(json.dumps({'job': name, 'image': image, 'trigger': 'own-queue-only'})); return
     if stage == 'migrate':
         execution = az(*command, 'start', '-g', GROUP, '-n', name)['name']
         for _ in range(72):
@@ -158,7 +211,7 @@ def deploy(stage, image, secrets):
         result = az('containerapp', 'revision', 'show', '-g', GROUP, '-n', name, '--revision', revision)
         if result['properties']['healthState'] == 'Healthy' and app['properties'].get('latestReadyRevisionName') == revision:
             verify(app, expected)
-            print(json.dumps({'revision': revision, 'image': image, 'privateIngress': True, 'admission': 'disabled'})); return
+            print(json.dumps({'revision': revision, 'image': image, 'privateIngress': True, 'runtime': 'configured' if serving is not None else 'disabled', 'databaseAdmission': 'unchanged'})); return
         time.sleep(5)
     raise ValueError('closed API readiness not verified')
 
@@ -166,10 +219,15 @@ if __name__ == '__main__':
     try:
         if len(sys.argv) != 3:
             raise ValueError('usage: closed-release.py api|migrate IMAGE_DIGEST')
-        deploy(sys.argv[1], sys.argv[2], {
+        secrets = {
             'api-database-url': os.environ['API_DATABASE_SECRET_URI'],
             'migrate-database-url': os.environ['MIGRATE_DATABASE_SECRET_URI'],
             'channel-secret': os.environ['LINE_CHANNEL_SECRET_URI'],
-        })
+        }
+        serving = None
+        if os.environ.get('SERVING') == 'true':
+            secrets.update(json.loads(os.environ['RUNTIME_SECRET_URIS']))
+            serving = json.loads(os.environ['LINE_RUNTIME_IDENTITIES'])
+        deploy(sys.argv[1], sys.argv[2], secrets, serving)
     except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError) as error:
         sys.exit('Closed release failed: ' + type(error).__name__)
