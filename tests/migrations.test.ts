@@ -60,13 +60,13 @@ test(
     t.after(() => rm(directory, { recursive: true, force: true }));
     await cp("migrations", directory, { recursive: true });
     await writeFile(
-      join(directory, "030_fixture.sql"),
+      join(directory, "999_fixture.sql"),
       "CREATE TABLE rollback_probe(id int); SELECT 1/0; -- private-query-and-credential",
     );
     await assert.rejects(migrate(pool, directory), (error) => {
       assert.deepEqual(migrationDiagnostic(error), {
         event: "migration_failed",
-        step: 30,
+        step: 999,
         code: "22012",
       });
       assert.equal((error as Error).message, "migration_failed");

@@ -45,11 +45,8 @@ async function main() {
       : {}),
     channelSecret: config.channelSecret,
     checkDatabase: async () => {
-      if (runtime) {
-        const row = (await pool.query("SELECT mode FROM runtime_state"))
-          .rows[0];
-        if (row?.mode !== "open") throw new Error("runtime_closed");
-      } else await pool.query("SELECT 1");
+      if (runtime) await runtime.checkDatabase();
+      else await pool.query("SELECT 1");
     },
   });
   const timers: NodeJS.Timeout[] = [];
