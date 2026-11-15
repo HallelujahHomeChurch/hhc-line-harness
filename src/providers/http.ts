@@ -9,11 +9,15 @@ export class DependencyError extends Error {
 }
 export class ServiceClient {
   readonly origin: URL;
-  readonly headers: Record<string, string>;
+  readonly headers:
+    | Record<string, string>
+    | ((signal: AbortSignal) => Promise<Record<string, string>>);
   readonly fetcher: typeof fetch;
   constructor(
     origin: string,
-    headers: Record<string, string>,
+    headers:
+      | Record<string, string>
+      | ((signal: AbortSignal) => Promise<Record<string, string>>),
     fetcher: typeof fetch = fetch,
   ) {
     this.origin = new URL(origin);
@@ -28,6 +32,15 @@ export class ServiceClient {
       throw new Error("invalid_service_origin");
     this.headers = headers;
     this.fetcher = fetcher;
+  }
+  async requestHeaders(signal: AbortSignal): Promise<Record<string, string>> {
+    try {
+      return typeof this.headers === "function"
+        ? await this.headers(signal)
+        : this.headers;
+    } catch {
+      throw new DependencyError();
+    }
   }
   async json(
     path: string,
@@ -44,12 +57,14 @@ export class ServiceClient {
     if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\"))
       throw new Error("invalid_service_path");
     try {
+      const signal = AbortSignal.timeout(options.timeoutMs ?? 2000);
+      const headers = await this.requestHeaders(signal);
       const response = await this.fetcher(new URL(path, this.origin), {
         method,
         redirect: "error",
-        signal: AbortSignal.timeout(options.timeoutMs ?? 2000),
+        signal,
         headers: {
-          ...this.headers,
+          ...headers,
           ...(options.ifMatch === undefined
             ? {}
             : { "If-Match": `"${options.ifMatch}"` }),
