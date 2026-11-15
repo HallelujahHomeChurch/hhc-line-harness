@@ -13,6 +13,7 @@ import { Search } from "../search/search.ts";
 import { Conversations } from "../domain/conversations.ts";
 import { Management } from "../domain/management.ts";
 import { SourceAccess } from "../domain/source-access.ts";
+import { RetainedAccess } from "../domain/retained-access.ts";
 import { ProtectedContent } from "../domain/protected-content.ts";
 import { LineIdentity } from "../providers/line-identity.ts";
 import { AssetOriginalClient } from "../providers/asset-original.ts";
@@ -121,6 +122,7 @@ export function createRuntime(
     adminOrigin: config.adminOrigin,
   });
   const sourceAccess = new SourceAccess(store);
+  const retainedAccess = new RetainedAccess(store);
   const identity = new LineIdentity(config.lineLoginChannelId, fetcher);
   const assetContent = new AssetOriginalClient(
     config.assetOrigin,
@@ -140,6 +142,17 @@ export function createRuntime(
     ? new AuditDispatcher(store, (event) => auditClient.append(event))
     : undefined;
   return {
+    checkDatabase: async () => {
+      const row = (
+        await pool.query("SELECT mode,generation FROM runtime_state")
+      ).rows[0];
+      if (
+        !row ||
+        !["open", "closed"].includes(row.mode) ||
+        row.generation !== (config.runtimeGeneration ?? "1")
+      )
+        throw Error("runtime_unavailable");
+    },
     close: async () => {
       await Promise.all([models?.close(), embeddingProvider?.close()]);
     },
@@ -161,6 +174,7 @@ export function createRuntime(
       token: config.sourceAccessToken,
       check: (input: unknown) => sourceAccess.check(input),
       checkBatch: (input: unknown) => sourceAccess.checkBatch(input),
+      checkRetained: (input: unknown) => retainedAccess.checkBatch(input),
     },
     initialize: async () => {
       await requireRuntimeGeneration(pool, config.runtimeGeneration ?? "1");

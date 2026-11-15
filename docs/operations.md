@@ -45,7 +45,9 @@ an incident investigation; repeated retries cannot replace append-only facts.
 `pnpm operations status` reads the configured `LINE_CHANNEL_ID` and emits bounded
 counts only. Runtime emits `line_harness_health` once per minute and a fixed
 `line_harness_intake_persist_failed` event for durable intake failure. Readiness
-checks the necessary DB and open admission mode; liveness is process-only. No
+checks the necessary DB, pinned generation and open/closed serving mode;
+closed intake remains ready for lifecycle decisions and denial events. Restoring
+or a generation mismatch is unready. Liveness is process-only. No
 public endpoint exposes operational counts or credentials.
 
 Snapshots include oldest pending download/index ages, original completed/failed/

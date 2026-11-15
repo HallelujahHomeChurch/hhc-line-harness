@@ -108,6 +108,11 @@ export async function applyLegacyLifecycle(
   event: LineEvent,
 ) {
   if (event.scope !== "group") return;
+  if (["unsend", "leave", "memberLeft"].includes(event.type))
+    await c.query(
+      "SELECT channel_id FROM legacy_handoffs WHERE channel_id=$1 FOR UPDATE",
+      [channel],
+    );
   if (event.type === "unsend" && event.unsentMessageId) {
     const rows = (
       await c.query(
@@ -119,12 +124,15 @@ export async function applyLegacyLifecycle(
   } else if (event.type === "leave" || event.type === "memberLeft") {
     // Owner must recheck membership/control; no automatic legacy resumption.
     await c.query(
-      "UPDATE legacy_sources SET group_blocked=true,revision=revision+1 WHERE channel_id=$1 AND manifest->>'groupId'=$2 AND NOT group_blocked",
+      "UPDATE legacy_sources SET group_blocked=true,revision=revision+1 WHERE channel_id=$1 AND manifest->>'groupId'=$2",
       [channel, event.scopeId],
     );
   }
 }
 export async function expireLegacy(c: PoolClient, now: Date) {
+  await c.query(
+    "SELECT channel_id FROM legacy_handoffs ORDER BY channel_id FOR UPDATE",
+  );
   const rows = (
     await c.query(
       "SELECT id FROM legacy_sources WHERE state='active' AND (manifest->>'expiresAt')::timestamptz<=$1 ORDER BY id LIMIT 100 FOR UPDATE",
@@ -317,6 +325,10 @@ export class LegacyHandoff {
         ).rowCount
       )
         throw new Error("restore_in_progress");
+      await c.query(
+        "SELECT channel_id FROM legacy_handoffs WHERE channel_id=$1 FOR UPDATE",
+        [this.store.channelId],
+      );
       const row = (
         await c.query(
           "SELECT * FROM legacy_sources WHERE id=$1 AND channel_id=$2 FOR UPDATE",
@@ -351,6 +363,10 @@ export class LegacyHandoff {
         ).rowCount
       )
         throw new Error("restore_in_progress");
+      await c.query(
+        "SELECT channel_id FROM legacy_handoffs WHERE channel_id=$1 FOR UPDATE",
+        [this.store.channelId],
+      );
       const row = await c.query(
         "SELECT id FROM legacy_sources WHERE id=$1 AND channel_id=$2 FOR UPDATE",
         [id, this.store.channelId],
@@ -378,6 +394,10 @@ export class LegacyHandoff {
         ).rowCount
       )
         throw new Error("restore_in_progress");
+      await c.query(
+        "SELECT channel_id FROM legacy_handoffs WHERE channel_id=$1 FOR UPDATE",
+        [this.store.channelId],
+      );
       const row = (
         await c.query(
           "SELECT * FROM legacy_sources WHERE id=$1 AND channel_id=$2 FOR UPDATE",
