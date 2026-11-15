@@ -24,10 +24,12 @@ def render(stage, image, secrets, serving=None):
     if not re.fullmatch(r'alive\.azurecr\.io/hhc-line-harness@sha256:[0-9a-f]{64}', image):
         raise ValueError('expected immutable Harness image')
     if serving is not None:
-        if set(serving) - {'EMBEDDING_CLIENT_ID'} != {'LINE_CHANNEL_ID', 'LINE_BOT_ID', 'LINE_LOGIN_CHANNEL_ID', 'HARNESS_RUNTIME_GENERATION'} or not all(isinstance(v, str) for v in serving.values()):
+        if set(serving) - {'EMBEDDING_CLIENT_ID', 'LINE_LIFF_ID'} != {'LINE_CHANNEL_ID', 'LINE_BOT_ID', 'LINE_LOGIN_CHANNEL_ID', 'HARNESS_RUNTIME_GENERATION'} or not all(isinstance(v, str) for v in serving.values()):
             raise ValueError('invalid serving settings')
         if not re.fullmatch(r'U[0-9a-f]{32}', serving['LINE_BOT_ID']) or serving['LINE_CHANNEL_ID'] != serving['LINE_BOT_ID'] or not re.fullmatch(r'[0-9]{1,20}', serving['LINE_LOGIN_CHANNEL_ID']) or not re.fullmatch(r'[1-9][0-9]{0,15}', serving['HARNESS_RUNTIME_GENERATION']):
             raise ValueError('invalid LINE identity')
+    if serving is not None and 'LINE_LIFF_ID' in serving and not re.fullmatch(re.escape(serving['LINE_LOGIN_CHANNEL_ID']) + r'-[A-Za-z0-9]{4,32}', serving['LINE_LIFF_ID']):
+        raise ValueError('LIFF must belong to the existing Login channel')
     if serving is not None and 'EMBEDDING_CLIENT_ID' in serving and not re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', serving['EMBEDDING_CLIENT_ID']):
         raise ValueError('invalid embedding identity')
     if stage == 'embedding' and (serving is None or 'EMBEDDING_CLIENT_ID' not in serving):
