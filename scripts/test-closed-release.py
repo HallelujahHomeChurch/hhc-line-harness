@@ -14,6 +14,17 @@ SECRETS = {k: 'https://alive-vault.vault.azure.net/secrets/hhc-line-harness-' + 
 ROOT = '/subscriptions/3765a72c-2c30-492c-8b88-7a26522903f8/resourceGroups/hhc-line-harness/providers/Microsoft.App/'
 
 class ReleaseTest(unittest.TestCase):
+    def test_liff_settings_are_bound_to_existing_login_channel_and_api_only(self):
+        secrets = {k: 'https://alive-vault.vault.azure.net/secrets/hhc-line-harness-' + k + '/' + 'b'*32 for k in ['api-database-url','channel-secret','api-line-token','reply-key','source-gate-token','account-token','gateway-token','audit-token','openai-key','openai-proxy','worker-database-url','download-token']}
+        settings = {'LINE_CHANNEL_ID':'U'+'a'*32,'LINE_BOT_ID':'U'+'a'*32,'LINE_LOGIN_CHANNEL_ID':'1234567891','HARNESS_RUNTIME_GENERATION':'3','LINE_LIFF_ID':'1234567891-AbCd1234'}
+        api = release.render('api', IMAGE, secrets, settings)['resources'][0]
+        worker = release.render('worker', IMAGE, secrets, settings)['resources'][0]
+        env = lambda r: {e['name']: e for e in r['properties']['template']['containers'][0]['env']}
+        self.assertEqual(env(api)['LINE_LIFF_ID']['value'], settings['LINE_LIFF_ID'])
+        self.assertNotIn('LINE_LIFF_ID', env(worker))
+        for value in ['9876543210-AbCd1234', '1234567891-bad!', '', '1234567891-abc']:
+            with self.assertRaises(ValueError): release.render('api', IMAGE, secrets, dict(settings, LINE_LIFF_ID=value))
+
     def test_models_and_embedding_job_remain_separate_from_original_downloads(self):
         secrets = {k: 'https://alive-vault.vault.azure.net/secrets/hhc-line-harness-' + k + '/' + 'b'*32 for k in ['api-database-url','channel-secret','api-line-token','reply-key','source-gate-token','account-token','gateway-token','audit-token','openai-key','openai-proxy','worker-database-url','download-token']}
         settings = {'LINE_CHANNEL_ID':'U'+'a'*32,'LINE_BOT_ID':'U'+'a'*32,'LINE_LOGIN_CHANNEL_ID':'123','HARNESS_RUNTIME_GENERATION':'2','EMBEDDING_CLIENT_ID':'11111111-1111-4111-8111-111111111111'}
