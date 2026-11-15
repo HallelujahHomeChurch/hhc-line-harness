@@ -14,9 +14,37 @@ SECRETS = {k: 'https://alive-vault.vault.azure.net/secrets/hhc-line-harness-' + 
 ROOT = '/subscriptions/3765a72c-2c30-492c-8b88-7a26522903f8/resourceGroups/hhc-line-harness/providers/Microsoft.App/'
 
 class ReleaseTest(unittest.TestCase):
+    def test_models_and_embedding_job_remain_separate_from_original_downloads(self):
+        secrets = {k: 'https://alive-vault.vault.azure.net/secrets/hhc-line-harness-' + k + '/' + 'b'*32 for k in ['api-database-url','channel-secret','api-line-token','reply-key','source-gate-token','account-token','gateway-token','audit-token','openai-key','openai-proxy','worker-database-url','download-token']}
+        settings = {'LINE_CHANNEL_ID':'U'+'a'*32,'LINE_BOT_ID':'U'+'a'*32,'LINE_LOGIN_CHANNEL_ID':'123','HARNESS_RUNTIME_GENERATION':'2','EMBEDDING_CLIENT_ID':'11111111-1111-4111-8111-111111111111'}
+        api = release.render('api', IMAGE, secrets, settings)['resources'][0]
+        job = release.render('embedding', IMAGE, secrets, settings)['resources'][0]
+        download = release.render('worker', IMAGE, secrets, settings)['resources'][0]
+        env = lambda r: {e['name']: e for e in r['properties']['template']['containers'][0]['env']}
+        self.assertEqual(env(api)['AGENT_ENABLED']['value'], 'true')
+        self.assertEqual(env(api)['OPENAI_MODEL']['value'], 'gpt-6.1-terra')
+        self.assertEqual(env(api)['OPENAI_PROXY_URL']['secretRef'], 'openai-proxy')
+        self.assertEqual(env(api)['AZURE_OPENAI_DEPLOYMENT']['value'], 'hhc-bulletin-ai')
+        self.assertEqual(env(job)['EMBEDDING_ENABLED']['value'], 'true')
+        self.assertTrue(next(iter(job['identity']['userAssignedIdentities'])).endswith('/hhc-line-harness-embedding'))
+        self.assertEqual(env(job)['AZURE_CLIENT_ID']['value'], settings['EMBEDDING_CLIENT_ID'])
+        self.assertEqual(env(job)['DATABASE_URL']['secretRef'], 'api-database-url')
+        self.assertNotIn('OPENAI_API_KEY', env(job))
+        self.assertNotIn('LINE_API_ACCESS_TOKEN', env(job))
+        self.assertNotIn('OPENAI_API_KEY', env(download))
+        self.assertEqual(env(download)['EMBEDDING_ENABLED']['value'], 'false')
+        for bad in [{k: v for k, v in settings.items() if k != 'EMBEDDING_CLIENT_ID'}, dict(settings, EMBEDDING_CLIENT_ID='invalid')]:
+            with self.assertRaises(ValueError): release.render('embedding', IMAGE, secrets, bad)
+        config = job['properties']['configuration']
+        self.assertEqual(config['replicaTimeout'], 660)
+        self.assertEqual(config['replicaRetryLimit'], 0)
+        self.assertEqual(config['scheduleTriggerConfig'], {'cronExpression':'*/15 * * * *','parallelism':1,'replicaCompletionCount':1})
+        self.assertEqual(job['properties']['template']['containers'][0]['command'], ['node','dist/src/embedding-worker.js'])
+        self.assertEqual([s['name'] for s in config['secrets']], ['api-database-url'])
+
     def test_serving_api_and_worker_keep_secrets_and_permissions_separate(self):
         secrets = dict(SECRETS)
-        for key in ['worker-database-url', 'api-line-token', 'download-token', 'reply-key', 'source-gate-token', 'account-token', 'gateway-token', 'audit-token']:
+        for key in ['worker-database-url', 'api-line-token', 'download-token', 'reply-key', 'source-gate-token', 'account-token', 'gateway-token', 'audit-token', 'openai-key', 'openai-proxy']:
             secrets[key] = 'https://alive-vault.vault.azure.net/secrets/hhc-line-harness-' + key + '/' + 'b' * 32
         settings = {'LINE_CHANNEL_ID': 'U'+'a'*32, 'LINE_BOT_ID': 'U'+'a'*32, 'LINE_LOGIN_CHANNEL_ID': '1234567891', 'HARNESS_RUNTIME_GENERATION': '2'}
         api = release.render('api', IMAGE, secrets, settings)['resources'][0]
@@ -45,20 +73,22 @@ class ReleaseTest(unittest.TestCase):
         for key in ['worker-database-url', 'download-token']:
             secrets[key] = 'https://alive-vault.vault.azure.net/secrets/hhc-line-harness-' + key + '/' + 'b'*32
         settings = {'LINE_CHANNEL_ID':'U'+'a'*32, 'LINE_BOT_ID':'U'+'a'*32, 'LINE_LOGIN_CHANNEL_ID':'1234', 'HARNESS_RUNTIME_GENERATION':'2'}
-        calls = []
-        expected = release.render('worker', IMAGE, secrets, settings)['resources'][0]
-        def fake_az(*args):
-            calls.append(args)
-            if args == ('account','show'): return {'id':release.SUBSCRIPTION}
-            if 'list' in args: return []
-            if args[:3] == ('deployment','group','what-if'):
-                return {'status':'Succeeded','changes':[{'resourceId':release.resource_id('worker'),'changeType':'Create'}]}
-            if args[:3] == ('deployment','group','create'): return {}
-            if args[:3] == ('containerapp','job','show'): return expected
-            raise AssertionError(args)
-        with patch.object(release, 'az', fake_az): release.deploy('worker', IMAGE, secrets, settings)
-        self.assertTrue(any(c[:3] == ('deployment','group','create') for c in calls))
-        self.assertEqual(calls[-1][:3], ('containerapp','job','show'))
+        settings['EMBEDDING_CLIENT_ID'] = '11111111-1111-4111-8111-111111111111'
+        for stage in ['worker', 'embedding']:
+            calls = []
+            expected = release.render(stage, IMAGE, secrets, settings)['resources'][0]
+            def fake_az(*args):
+                calls.append(args)
+                if args == ('account','show'): return {'id':release.SUBSCRIPTION}
+                if 'list' in args: return []
+                if args[:3] == ('deployment','group','what-if'):
+                    return {'status':'Succeeded','changes':[{'resourceId':release.resource_id(stage),'changeType':'Create'}]}
+                if args[:3] == ('deployment','group','create'): return {}
+                if args[:3] == ('containerapp','job','show'): return expected
+                raise AssertionError(args)
+            with patch.object(release, 'az', fake_az): release.deploy(stage, IMAGE, secrets, settings)
+            self.assertTrue(any(c[:3] == ('deployment','group','create') for c in calls))
+            self.assertEqual(calls[-1][:3], ('containerapp','job','show'))
 
     def test_api_provider_normalization_preserves_all_probe_and_ingress_checks(self):
         expected = release.render('api', IMAGE, SECRETS)['resources'][0]
@@ -133,33 +163,35 @@ class ReleaseTest(unittest.TestCase):
             self.assertFalse(any('deployment' in c or 'start' in c for c in calls))
 
     def test_enabled_queue_worker_fences_migration_before_cloud_write(self):
-        def fake_az(*args):
-            if args == ('account', 'show'): return {'id': release.SUBSCRIPTION}
-            if args == ('containerapp', 'list', '-g', release.GROUP): return []
-            if args == ('containerapp', 'job', 'list', '-g', release.GROUP):
-                return [{'name':'hhc-line-harness-worker','properties':{'template':{'containers':[{'env':[{'name':'HARNESS_ENABLED','value':'true'}]}]}}}]
-            raise AssertionError('unexpected write: '+str(args))
-        with patch.object(release, 'az', fake_az), self.assertRaisesRegex(ValueError, 'worker'):
-            release.deploy('migrate', IMAGE, SECRETS)
-
-    def test_disabled_worker_must_also_be_drained_before_migration(self):
-        for status in ['Running', 'Processing', 'Unknown', 'Succeeded', 'Failed', 'Stopped']:
-            calls = []
+        for stage, flag in [('worker', 'HARNESS_ENABLED'), ('embedding', 'EMBEDDING_ENABLED')]:
             def fake_az(*args):
-                calls.append(args)
                 if args == ('account', 'show'): return {'id': release.SUBSCRIPTION}
                 if args == ('containerapp', 'list', '-g', release.GROUP): return []
                 if args == ('containerapp', 'job', 'list', '-g', release.GROUP):
-                    return [{'name':'hhc-line-harness-worker','properties':{'template':{'containers':[{'env':[{'name':'HARNESS_ENABLED','value':'false'}]}]}}}]
-                if args[:3] == ('containerapp','job','execution'):
-                    return [{'properties':{'status':status}}]
-                if args[:3] == ('deployment','group','what-if'):
-                    raise ValueError('reached scoped preview')
+                    return [{'name':'hhc-line-harness-'+stage,'properties':{'template':{'containers':[{'env':[{'name':flag,'value':'true'}]}]}}}]
                 raise AssertionError('unexpected write: '+str(args))
-            expected = 'reached scoped preview' if status in ['Succeeded','Failed','Stopped'] else 'worker execution still active'
-            with self.subTest(status=status), patch.object(release, 'az', fake_az), self.assertRaisesRegex(ValueError, expected):
+            with patch.object(release, 'az', fake_az), self.assertRaisesRegex(ValueError, 'worker'):
                 release.deploy('migrate', IMAGE, SECRETS)
-            self.assertFalse(any('create' in c or 'start' in c for c in calls))
+
+    def test_disabled_worker_must_also_be_drained_before_migration(self):
+        for stage, flag in [('worker', 'HARNESS_ENABLED'), ('embedding', 'EMBEDDING_ENABLED')]:
+            for status in ['Running', 'Processing', 'Unknown', 'Succeeded', 'Failed', 'Stopped']:
+                calls = []
+                def fake_az(*args):
+                    calls.append(args)
+                    if args == ('account', 'show'): return {'id': release.SUBSCRIPTION}
+                    if args == ('containerapp', 'list', '-g', release.GROUP): return []
+                    if args == ('containerapp', 'job', 'list', '-g', release.GROUP):
+                        return [{'name':'hhc-line-harness-'+stage,'properties':{'template':{'containers':[{'env':[{'name':flag,'value':'false'}]}]}}}]
+                    if args[:3] == ('containerapp','job','execution'):
+                        return [{'properties':{'status':status}}]
+                    if args[:3] == ('deployment','group','what-if'):
+                        raise ValueError('reached scoped preview')
+                    raise AssertionError('unexpected write: '+str(args))
+                expected = 'reached scoped preview' if status in ['Succeeded','Failed','Stopped'] else 'worker execution still active'
+                with self.subTest(status=status), patch.object(release, 'az', fake_az), self.assertRaisesRegex(ValueError, expected):
+                    release.deploy('migrate', IMAGE, SECRETS)
+                self.assertFalse(any('create' in c or 'start' in c for c in calls))
 
     def test_admitted_api_fences_migration_before_any_cloud_write(self):
         calls = []

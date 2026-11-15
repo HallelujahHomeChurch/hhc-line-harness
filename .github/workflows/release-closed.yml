@@ -99,6 +99,10 @@ jobs:
         if: inputs.serving
         shell: bash
         run: python3 scripts/closed-release.py worker "$IMAGE" | tee worker-receipt.json
+      - name: Deploy and verify bounded embedding worker
+        if: inputs.serving
+        shell: bash
+        run: python3 scripts/closed-release.py embedding "$IMAGE" | tee embedding-receipt.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
