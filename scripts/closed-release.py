@@ -14,7 +14,7 @@ ROOT = f'/subscriptions/{SUBSCRIPTION}/resourceGroups/{GROUP}/providers/'
 ENVIRONMENT = f'/subscriptions/{SUBSCRIPTION}/resourceGroups/alive/providers/Microsoft.App/managedEnvironments/alive-env'
 
 def resource_id(stage):
-    if stage not in ['api', 'migrate', 'worker']:
+    if stage not in ['api', 'migrate', 'worker', 'embedding']:
         raise ValueError('unsupported release stage')
     kind = 'containerApps' if stage == 'api' else 'jobs'
     return ROOT + f'Microsoft.App/{kind}/hhc-line-harness-{stage}'
@@ -24,18 +24,22 @@ def render(stage, image, secrets, serving=None):
     if not re.fullmatch(r'alive\.azurecr\.io/hhc-line-harness@sha256:[0-9a-f]{64}', image):
         raise ValueError('expected immutable Harness image')
     if serving is not None:
-        if set(serving) != {'LINE_CHANNEL_ID', 'LINE_BOT_ID', 'LINE_LOGIN_CHANNEL_ID', 'HARNESS_RUNTIME_GENERATION'} or not all(isinstance(v, str) for v in serving.values()):
+        if set(serving) - {'EMBEDDING_CLIENT_ID'} != {'LINE_CHANNEL_ID', 'LINE_BOT_ID', 'LINE_LOGIN_CHANNEL_ID', 'HARNESS_RUNTIME_GENERATION'} or not all(isinstance(v, str) for v in serving.values()):
             raise ValueError('invalid serving settings')
         if not re.fullmatch(r'U[0-9a-f]{32}', serving['LINE_BOT_ID']) or serving['LINE_CHANNEL_ID'] != serving['LINE_BOT_ID'] or not re.fullmatch(r'[0-9]{1,20}', serving['LINE_LOGIN_CHANNEL_ID']) or not re.fullmatch(r'[1-9][0-9]{0,15}', serving['HARNESS_RUNTIME_GENERATION']):
             raise ValueError('invalid LINE identity')
-    if stage == 'worker' and serving is None:
+    if serving is not None and 'EMBEDDING_CLIENT_ID' in serving and not re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', serving['EMBEDDING_CLIENT_ID']):
+        raise ValueError('invalid embedding identity')
+    if stage == 'embedding' and (serving is None or 'EMBEDDING_CLIENT_ID' not in serving):
+        raise ValueError('embedding requires dedicated identity')
+    if stage in ['worker', 'embedding'] and serving is None:
         raise ValueError('worker requires serving settings')
-    keys = ['api-database-url', 'channel-secret'] if stage == 'api' else [stage + '-database-url']
+    keys = ['api-database-url', 'channel-secret'] if stage == 'api' else ['api-database-url'] if stage == 'embedding' else [stage + '-database-url']
     bindings = {}
     if serving is not None and stage == 'api':
         bindings = {'LINE_API_ACCESS_TOKEN': 'api-line-token', 'REPLY_ENCRYPTION_KEY': 'reply-key',
                     'ASSET_SOURCE_GATE_TOKEN': 'source-gate-token', 'ACCOUNT_HARNESS_PRIVATE_TOKEN': 'account-token',
-                    'HARNESS_GATEWAY_PRIVATE_TOKEN': 'gateway-token', 'AUDIT_HARNESS_TOKEN': 'audit-token'}
+                    'HARNESS_GATEWAY_PRIVATE_TOKEN': 'gateway-token', 'AUDIT_HARNESS_TOKEN': 'audit-token', 'OPENAI_API_KEY': 'openai-key', 'OPENAI_PROXY_URL': 'openai-proxy'}
     if stage == 'worker':
         bindings = {'LINE_DOWNLOAD_ACCESS_TOKEN': 'download-token'}
     keys += list(bindings.values())
@@ -54,15 +58,31 @@ def render(stage, image, secrets, serving=None):
             'ASSET_API_ORIGIN': 'https://asset-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io',
             'ASSET_WORKLOAD_AUDIENCE': 'api://603d78de-1f3e-448f-b716-0a4ffaa58887',
             'HARNESS_QUEUE_URL': 'https://alivestoragebb99ee6e.queue.core.windows.net/hhc-line-harness-wakes',
-            'AZURE_CLIENT_ID': '3d69ffef-71f7-4743-ad87-184a4aa472a5' if stage == 'api' else '90d03d34-cd52-49dd-a828-c10d91015585',
+            'AZURE_CLIENT_ID': serving['EMBEDDING_CLIENT_ID'] if stage == 'embedding' else '3d69ffef-71f7-4743-ad87-184a4aa472a5' if stage == 'api' else '90d03d34-cd52-49dd-a828-c10d91015585',
         }
         if stage == 'api':
-            values.update(serving)
+            values.update({k: v for k, v in serving.items() if k != 'EMBEDDING_CLIENT_ID'})
             values.update({'LINE_HARNESS_PROFILE': 'helper', 'ADMIN_ORIGIN': 'https://admin.alive.org.tw',
                 'ACCOUNT_API_ORIGIN': 'https://account-api.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io',
                 'AUDIT_API_ORIGIN': 'https://audit-log.internal.gentleriver-81abd7bc.eastasia.azurecontainerapps.io'})
-        else:
+        elif stage == 'worker':
             values['ASSET_UPLOAD_ORIGINS'] = 'https://alivestoragebb99ee6e.blob.core.windows.net'
+        if stage in ['api', 'embedding']:
+            values.update({'EMBEDDING_ENABLED': 'true', 'EMBEDDING_PROVIDER': 'azure',
+                'AZURE_OPENAI_ENDPOINT': 'https://bible-text-embedding-resource.openai.azure.com/openai/v1/',
+                'EMBEDDING_MODEL': 'text-embedding-3-small', 'EMBEDDING_RESPONSE_MODEL': 'text-embedding-3-small',
+                'EMBEDDING_VERSION': 'azure-text-embedding-3-small-v1', 'EMBEDDING_DIMENSIONS': '1536',
+                'EMBEDDING_INPUT_MICROS_PER_MILLION': '20000'})
+        if stage == 'api':
+            tariff = json.dumps({'inputMicrosPerMillion': 1000000, 'outputMicrosPerMillion': 5000000,
+                'cachedInputMicrosPerMillion': 50000, 'cacheWriteMicrosPerMillion': 1250000,
+                'cacheWriteLongMicrosPerMillion': 2500000}, separators=(',', ':'))
+            values.update({'AGENT_ENABLED': 'true', 'OPENAI_MODEL': 'gpt-6.1-terra',
+                'AZURE_OPENAI_DEPLOYMENT': 'hhc-bulletin-ai',
+                'OPENAI_TARIFF_JSON': tariff, 'AZURE_OPENAI_TARIFF_JSON': tariff})
+        if stage == 'embedding':
+            values = {k: v for k, v in values.items() if k.startswith('EMBEDDING_') or k in
+                ['HARNESS_RUNTIME_GENERATION', 'LINE_CHANNEL_ID', 'AZURE_CLIENT_ID', 'AZURE_OPENAI_ENDPOINT']}
         env = [entry for entry in env if entry['name'] not in values]
         env += [{'name': name, 'value': value} for name, value in values.items()]
         env += [{'name': name, 'secretRef': key} for name, key in bindings.items()]
@@ -97,6 +117,11 @@ def render(stage, image, secrets, serving=None):
                         'rules': [{'name': 'harness-wakes', 'type': 'azure-queue', 'identity': identity,
                             'metadata': {'accountName': 'alivestoragebb99ee6e', 'queueName': 'hhc-line-harness-wakes', 'queueLength': '1'}}]}}})
             container['command'] = ['node', 'dist/src/worker.js']
+        if stage == 'embedding':
+            config.pop('manualTriggerConfig')
+            config.update({'triggerType': 'Schedule', 'replicaTimeout': 660,
+                'scheduleTriggerConfig': {'cronExpression': '*/15 * * * *', 'parallelism': 1, 'replicaCompletionCount': 1}})
+            container['command'] = ['node', 'dist/src/embedding-worker.js']
     resource = {'type': 'Microsoft.App/' + ('containerApps' if stage == 'api' else 'jobs'),
                 'apiVersion': '2025-07-01', 'name': 'hhc-line-harness-' + stage,
                 'location': 'eastasia', 'identity': {'type': 'UserAssigned', 'userAssignedIdentities': {identity: {}}},
@@ -168,9 +193,9 @@ def deploy(stage, image, secrets, serving=None):
     resources = az(*command, 'list', '-g', GROUP)
     if stage == 'migrate':
         for job in resources:
-            if job['name'] == 'hhc-line-harness-worker':
+            if job['name'] in ['hhc-line-harness-worker', 'hhc-line-harness-embedding']:
                 entries = job['properties']['template']['containers'][0]['env']
-                if {x['name']: x.get('value') for x in entries}.get('HARNESS_ENABLED') != 'false':
+                if {x['name']: x.get('value') for x in entries}.get('HARNESS_ENABLED' if job['name'].endswith('-worker') else 'EMBEDDING_ENABLED') != 'false':
                     raise ValueError('stop and drain the queue worker before migration')
                 if any(x['properties']['status'] not in ['Succeeded', 'Failed', 'Stopped'] for x in az('containerapp', 'job', 'execution', 'list', '-g', GROUP, '-n', job['name'])):
                     raise ValueError('queue worker execution still active')
@@ -192,8 +217,8 @@ def deploy(stage, image, secrets, serving=None):
            '--mode', 'Incremental', '--template-file', str(path))
     actual = az(*command, 'show', '-g', GROUP, '-n', name)
     verify(actual, expected)
-    if stage == 'worker':
-        print(json.dumps({'job': name, 'image': image, 'trigger': 'own-queue-only'})); return
+    if stage in ['worker', 'embedding']:
+        print(json.dumps({'job': name, 'image': image, 'trigger': 'own-queue-only' if stage == 'worker' else 'bounded-quarter-hour'})); return
     if stage == 'migrate':
         execution = az(*command, 'start', '-g', GROUP, '-n', name)['name']
         for _ in range(72):

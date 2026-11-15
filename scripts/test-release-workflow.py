@@ -9,7 +9,7 @@ ci = Path('.github/workflows/ci.yml').read_text()
 for content, prefix in [(ci, 'verified-image-'), (workflow, 'closed-release-receipt-')]:
     artifact_name = re.search(r'name: ('+prefix+r'.*)', content).group(1)
     assert '${{ github.run_attempt }}' in artifact_name, 'rerun must retain a distinct immutable artifact'
-for title in ['Deploy and verify bounded migration', 'Deploy and verify private API', 'Deploy and verify isolated queue worker']:
+for title in ['Deploy and verify bounded migration', 'Deploy and verify private API', 'Deploy and verify isolated queue worker', 'Deploy and verify bounded embedding worker']:
     block = re.search(r'      - name: '+re.escape(title)+r'\n(.*?)(?=\n      - |\Z)', workflow, re.S).group(1)
     args = ['bash', '-e']
     if re.search(r'^        shell: bash$', block, re.M): args += ['-o', 'pipefail']
