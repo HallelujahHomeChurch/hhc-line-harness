@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -13,6 +14,25 @@ SECRETS = {k: 'https://alive-vault.vault.azure.net/secrets/hhc-line-harness-' + 
 ROOT = '/subscriptions/3765a72c-2c30-492c-8b88-7a26522903f8/resourceGroups/hhc-line-harness/providers/Microsoft.App/'
 
 class ReleaseTest(unittest.TestCase):
+    def test_cli_preview_uses_json_and_rejects_writes_outside_target(self):
+        for stage in ['api', 'migrate']:
+            def fake_output(args):
+                if args[1:3] == ['account', 'show']:
+                    return json.dumps({'id': release.SUBSCRIPTION}).encode()
+                if args[1] == 'containerapp' and 'list' in args:
+                    return b'[]'
+                if args[1:4] == ['deployment', 'group', 'what-if']:
+                    if '--no-pretty-print' not in args:
+                        return b'Resource changes: 1 to create, 1 to modify.'
+                    return json.dumps({'status': 'Succeeded', 'changes': [
+                        {'resourceId': release.resource_id(stage), 'changeType': 'Create'},
+                        {'resourceId': ROOT+'containerApps/unrelated', 'changeType': 'Modify'},
+                    ]}).encode()
+                raise AssertionError('unexpected write: '+str(args))
+            with patch.object(release.subprocess, 'check_output', fake_output):
+                with self.assertRaisesRegex(ValueError, 'preview exceeds stage scope'):
+                    release.deploy(stage, IMAGE, SECRETS)
+
     def test_admitted_active_or_draining_revision_fences_closed_latest_template(self):
         for active, replicas in [(True, 0), (False, 1)]:
             calls = []
