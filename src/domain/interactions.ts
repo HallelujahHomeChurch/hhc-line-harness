@@ -535,8 +535,24 @@ export class Interactions {
           row.actor_id,
           row,
         );
-        text = `請由網站管理員開啟 ${this.ports.adminOrigin}/line-harness/setup#intent=${intent} 完成登入與 LINE 綁定，再回本群組確認。尚未開始收錄。`;
-        actions = [{ label: "預覽群組設定", data: `setup:preview:${intent}` }];
+        const setup = await this.registration.read(intent, row.actor_id);
+        if (["draft", "preview"].includes(setup.state)) {
+          const preview = await this.registration.preview(
+            intent,
+            row.actor_id,
+            row.scope_id,
+            row,
+          );
+          text = preview.text;
+          actions = [
+            {
+              label: "確認並啟用",
+              data: `setup:confirm:${intent}:${preview.token}`,
+            },
+          ];
+        } else {
+          text = `設定此群組：${this.ports.adminOrigin}/line-harness#intent=${intent}\n儲存後回本群組 @小哈 設定，即可確認啟用。`;
+        }
       } else if (row.kind === "preview") {
         const preview = await this.registration.preview(
           payload.intent!,

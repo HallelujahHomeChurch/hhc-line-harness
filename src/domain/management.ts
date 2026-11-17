@@ -308,6 +308,45 @@ export class Management {
     if (!g) throw Error("management_changed");
     return g;
   }
+  async startSetup(actor: string, id: string) {
+    const a = await this.admin(actor);
+    if (!a.bound || !/^U[0-9a-f]{32}$/.test(a.lineUserId ?? ""))
+      throw Error("admin_binding_required");
+    if (!uuid(id)) throw Error("invalid_management_request");
+    const g = (
+      await this.store.pool.query(
+        "SELECT line_group_id,state,revision,sharing_enabled,collection_id FROM groups WHERE id=$1 AND channel_id=$2",
+        [id, this.store.channelId],
+      )
+    ).rows[0];
+    if (!g || ["deleting", "deleted", "left"].includes(g.state))
+      throw Error("management_changed");
+    const lineAuthority = await this.registration.admin(a.lineUserId!);
+    if (
+      lineAuthority.actorUserId !== actor ||
+      lineAuthority.bindingGeneration !== a.bindingGeneration ||
+      lineAuthority.adminAuthorizationRevision !== a.adminAuthorizationRevision
+    )
+      throw Error("admin_binding_required");
+    if (!(await this.registration.ports.member(g.line_group_id, a.lineUserId!)))
+      throw Error("group_membership_required");
+    const intent = await this.registration.begin(
+      g.line_group_id,
+      a.lineUserId!,
+      undefined,
+      g.revision,
+    );
+    const setup = await this.setup(actor, intent);
+    // Seed only a new draft; reopening must preserve unsaved-in-group choices.
+    if (setup.state === "bootstrap" && g.state !== "pending") {
+      return this.configure(actor, intent, {
+        sharing: g.sharing_enabled,
+        ...(g.sharing_enabled ? { collectionId: g.collection_id } : {}),
+        expectedRevision: setup.revision!,
+      });
+    }
+    return setup;
+  }
   async setup(actor: string, id: string) {
     await this.admin(actor);
     if (!uuid(id)) throw Error("setup_expired_or_changed");
@@ -343,6 +382,10 @@ export class Management {
       sharing: intent.sharing_enabled,
       collectionId: intent.collection_id,
       audience: intent.audience ?? [],
+      audienceLabels: await this.registration.audienceLabels(
+        actor,
+        intent.audience ?? [],
+      ),
       addReader: intent.add_reader,
       groupId: intent.group_id,
     };
@@ -394,7 +437,17 @@ export class Management {
     const collection = await this.registration.approval(g.collection_id);
     if (String(collection.bindingGeneration) !== g.binding_generation)
       throw Error("management_changed");
-    return { group: g, collection };
+    const readers = await Promise.all(
+      (collection.readers ?? []).map(async (reader) => ({
+        ...reader,
+        label:
+          (await this.registration.ports
+            .subject?.(actor, reader.type, reader.subjectId)
+            .then((subject) => subject.label)
+            .catch(() => reader.subjectId)) ?? reader.subjectId,
+      })),
+    );
+    return { group: g, collection: { ...collection, readers } };
   }
   async previewRevoke(
     actor: string,

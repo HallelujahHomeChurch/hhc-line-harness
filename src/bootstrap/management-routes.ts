@@ -13,6 +13,7 @@ export function managementRoutes(
   const routes = [
     ["GET", `${prefix}/groups`],
     ["POST", `${prefix}/groups/search`],
+    ["POST", `${prefix}/groups/:id/setup`],
     ["POST", `${prefix}/retained-groups/search`],
     ["POST", `${prefix}/retained-groups/revalidate`],
     ["GET", `${prefix}/groups/:id/readers`],
@@ -56,6 +57,11 @@ export function managementRoutes(
               .send({ error: "invalid_management_request" });
           }
         try {
+          if (url === `${prefix}/groups/:id/setup`) {
+            if (Object.keys(body).length)
+              throw Error("invalid_management_request");
+            return await management.startSetup(actor, request.params.id!);
+          }
           if (url === `${prefix}/retained-groups/search`)
             return await management.retainedGroups(actor, body);
           if (url === `${prefix}/retained-groups/revalidate`)
@@ -202,6 +208,7 @@ export function managementRoutes(
           const status =
             code === "admin_required" ||
             code === "admin_binding_required" ||
+            code === "group_membership_required" ||
             code === "retained_membership_required"
               ? 403
               : code === "setup_expired_or_changed" ||

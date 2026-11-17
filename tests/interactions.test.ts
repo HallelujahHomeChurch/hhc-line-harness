@@ -83,9 +83,12 @@ test(
       const next = {
         ...event,
         id,
-        type: "postback" as const,
-        message: undefined,
-        postback,
+        type: id === "preview" ? ("message" as const) : ("postback" as const),
+        message:
+          id === "preview"
+            ? { ...event.message!, text: "@小哈 設定" }
+            : undefined,
+        postback: id === "preview" ? undefined : postback,
       };
       await store.ingest(next, (c, e, g) => interactions.record(c, e, g));
       await interactions.processOne();
