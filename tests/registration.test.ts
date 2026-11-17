@@ -585,3 +585,38 @@ test(
     assert.equal(remote?.state, "active");
   },
 );
+
+test(
+  "sharing confirmation identifies existing folder readers and falls back to IDs if name lookup fails",
+  { skip: !databaseEnabled },
+  async (t) => {
+    const { registration, intent } = await fixture(t);
+    const reader = "22222222-2222-4222-8222-222222222222";
+    registration.ports.collection = async (id) => ({
+      id,
+      aclRevision: 1,
+      bindingGeneration: 1,
+      audience: [`role:${reader}`],
+    });
+    registration.ports.subject = async (_actor, type, id) => ({
+      id,
+      type,
+      label: "影音同工",
+    });
+    await registration.configure(intent, line, {
+      sharing: true,
+      collectionId: "a".repeat(32),
+    });
+    assert.match(
+      (await registration.preview(intent, line, group)).text,
+      /影音同工/,
+    );
+    registration.ports.subject = async () => {
+      throw Error("unavailable");
+    };
+    assert.match(
+      (await registration.preview(intent, line, group)).text,
+      new RegExp(reader),
+    );
+  },
+);

@@ -382,6 +382,10 @@ export class Management {
       sharing: intent.sharing_enabled,
       collectionId: intent.collection_id,
       audience: intent.audience ?? [],
+      audienceLabels: await this.registration.audienceLabels(
+        actor,
+        intent.audience ?? [],
+      ),
       addReader: intent.add_reader,
       groupId: intent.group_id,
     };

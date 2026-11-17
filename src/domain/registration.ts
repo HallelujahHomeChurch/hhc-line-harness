@@ -369,8 +369,9 @@ export class Registration {
       )
         conflict();
     }
-    this.notice({
+    await this.notice({
       ...intent,
+      account_actor_id: a.actorUserId,
       sharing_enabled: config.sharing,
       audience: collection?.audience ?? [],
       add_reader: reader,
@@ -425,11 +426,39 @@ export class Registration {
       );
     });
   }
-  notice(intent: Intent) {
+  async audienceLabels(actor: string | null, audience: string[]) {
+    return Promise.all(
+      audience.map(async (entry) => {
+        const [type, id] = entry.split(":");
+        if (
+          !actor ||
+          !this.ports.subject ||
+          !["user", "role"].includes(type!) ||
+          !uuid(id ?? "")
+        )
+          return entry;
+        try {
+          const subject = await this.ports.subject(
+            actor,
+            type as "user" | "role",
+            id!,
+          );
+          return `${type === "role" ? "角色" : "使用者"}：${subject.label}`;
+        } catch {
+          return entry;
+        }
+      }),
+    );
+  }
+  async notice(intent: Intent) {
+    const audience = await this.audienceLabels(
+      intent.account_actor_id,
+      intent.audience ?? [],
+    );
     const text = `群組啟用確認
 • 收錄全體成員的新訊息與附件，保存 90 天；現在與未來成員均可查詢。
 • 附件不掃描病毒、不轉檔；不辨識圖片或影音，只讀 PDF 內嵌文字與試算表值。查詢可能交由 OpenAI／Azure 處理。
-• ${intent.sharing_enabled ? "分享至 Presenter 資料夾，依現有讀取權限授權使用者與角色成員同步；角色成員變更會影響存取。切換資料夾不搬移舊素材。" : "不分享至 Presenter。"}${intent.add_reader ? `確認後新增讀取權限：${intent.add_reader.label}。` : ""}
+• ${intent.sharing_enabled ? `Presenter 分享對象：${audience.join("、") || "尚無讀者"}；角色成員變更會影響存取。切換資料夾不搬移舊素材。` : "不分享至 Presenter。"}${intent.add_reader ? `確認後新增讀取權限：${intent.add_reader.label}。` : ""}
 • 成員可預覽確認刪除自己的資料，管理員可暫停、恢復或刪除群組。暫停會停止收錄與讀取，90 天期限照算；恢復不回補，不主動推播。已匯出的離線副本無法即時收回。`;
 
     if (text.length > 4500) throw Error("audience_too_large");
@@ -461,7 +490,7 @@ export class Registration {
         ],
       );
     });
-    return { token, text: this.notice(intent) };
+    return { token, text: await this.notice(intent) };
   }
   async confirm(
     id: string,
@@ -481,6 +510,7 @@ export class Registration {
     )
       conflict();
     await this.current(intent, lineId, groupId);
+    const notice = await this.notice(intent);
     await this.store.transaction(async (c) => {
       await this.locked(c, intent, fence);
       if (intent.sharing_enabled) {
@@ -513,7 +543,7 @@ export class Registration {
           deliveryId,
           intent.group_id,
           intent.group_revision,
-          this.notice(intent) + " 收錄將於本次公告成功且批准版本提交後開始。",
+          notice + " 收錄將於本次公告成功且批准版本提交後開始。",
         ],
       );
       await c.query(
