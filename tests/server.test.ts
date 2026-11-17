@@ -253,6 +253,7 @@ test("management requires verified Gateway user, ignores no identity input and r
       return [];
     },
     setup: async () => ({ state: "draft" }),
+    startSetup: async () => ({ state: "bootstrap" }),
     configure: async () => ({ state: "draft" }),
   } as unknown as InstanceType<typeof Management>;
   const app = createServer({
@@ -292,6 +293,22 @@ test("management requires verified Gateway user, ignores no identity input and r
     200,
   );
   assert.equal(actor, headers["x-hhc-user-id"]);
+  for (const [payload, status] of [
+    [{}, 200],
+    [{ actor: "forged" }, 400],
+  ] as const) {
+    assert.equal(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/line/harness/admin/groups/id/setup",
+          headers,
+          payload,
+        })
+      ).statusCode,
+      status,
+    );
+  }
   assert.equal(
     (
       await app.inject({

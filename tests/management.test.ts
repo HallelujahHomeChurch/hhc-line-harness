@@ -27,6 +27,7 @@ async function fixture(t: Parameters<typeof database>[0]) {
     allowed,
     bound,
     actorUserId: actor,
+    lineUserId: line,
     adminAuthorizationRevision: revision,
     ...(bound ? { bindingGeneration: 1 } : {}),
   });
@@ -53,6 +54,69 @@ async function fixture(t: Parameters<typeof database>[0]) {
     },
   };
 }
+test(
+  "group settings resume the same actor's draft without enabling intake",
+  { skip: !databaseEnabled },
+  async (t) => {
+    const { pool, registration, management, change } = await fixture(t);
+    const id = await registration.begin(group, line);
+    const groupId = (await pool.query("SELECT id FROM groups")).rows[0].id;
+    assert.equal((await management.startSetup(actor, groupId)).id, id);
+    await management.configure(actor, id, {
+      sharing: false,
+      expectedRevision: 1,
+    });
+    assert.equal((await management.startSetup(actor, groupId)).id, id);
+    assert.equal(await registration.begin(group, line), id);
+    change(true, true, 2);
+    assert.notEqual((await management.startSetup(actor, groupId)).id, id);
+    assert.equal(
+      (await pool.query("SELECT state FROM groups")).rows[0].state,
+      "pending",
+    );
+    assert.equal(
+      (await pool.query("SELECT count(*)::int n FROM deliveries")).rows[0].n,
+      0,
+    );
+    registration.ports.member = async () => false;
+    await assert.rejects(
+      management.startSetup(actor, groupId),
+      /group_membership_required/,
+    );
+    registration.ports.member = async () => true;
+    change(true, false, 2);
+    await assert.rejects(
+      management.startSetup(actor, groupId),
+      /admin_binding_required/,
+    );
+    change(false, true, 3);
+    await assert.rejects(
+      management.startSetup(actor, groupId),
+      /admin_required/,
+    );
+  },
+);
+test(
+  "a concurrent deletion cannot be resurrected by opening Admin settings",
+  { skip: !databaseEnabled },
+  async (t) => {
+    const { pool, registration, management } = await fixture(t);
+    await registration.begin(group, line);
+    const groupId = (await pool.query("SELECT id FROM groups")).rows[0].id;
+    registration.ports.member = async () => {
+      await pool.query("UPDATE groups SET state='deleted',revision=revision+1");
+      return true;
+    };
+    await assert.rejects(
+      management.startSetup(actor, groupId),
+      /setup_expired_or_changed/,
+    );
+    assert.equal(
+      (await pool.query("SELECT state FROM groups")).rows[0].state,
+      "deleted",
+    );
+  },
+);
 test(
   "website setup is same verified actor only and exposes no message content",
   { skip: !databaseEnabled },

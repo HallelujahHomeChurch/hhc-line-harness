@@ -89,6 +89,7 @@ export class Registration {
     groupId: string,
     lineId: string,
     fence?: InteractionFence,
+    expectedGroupRevision?: string,
   ): Promise<string> {
     if (!/^C[0-9a-f]{32}$/.test(groupId) || !/^U[0-9a-f]{32}$/.test(lineId))
       conflict();
@@ -107,6 +108,7 @@ export class Registration {
         [this.store.channelId, groupId],
       )
     ).rows[0];
+    const authority = previous ? await this.ports.authority(lineId) : undefined;
     if (previous?.state === "deleted") {
       await this.admin(lineId);
       if (!(await this.ports.member(groupId, lineId))) conflict();
@@ -126,6 +128,11 @@ export class Registration {
         )
       ).rows[0];
       await this.store.requireInteraction(c, fence);
+      if (
+        expectedGroupRevision !== undefined &&
+        group.revision !== expectedGroupRevision
+      )
+        conflict();
       await c.query("UPDATE groups SET display_name=$2 WHERE id=$1", [
         group.id,
         displayName,
@@ -147,16 +154,21 @@ export class Registration {
           )
         ).rows[0];
       }
-      // Reuse a live bootstrap on redelivery; approval always requires this actor again.
+      // Returning from Admin must reopen this actor's saved choices, never another actor's.
       const existing = (
         await c.query(
-          "SELECT id FROM setup_intents WHERE group_id=$1 AND line_actor_id=$2 AND state='bootstrap' AND expires_at>$3 AND group_revision=$4 AND runtime_generation=$5 ORDER BY expires_at DESC LIMIT 1",
+          "SELECT id FROM setup_intents WHERE group_id=$1 AND line_actor_id=$2 AND (state='bootstrap' OR (state IN ('draft','preview') AND account_actor_id=$6 AND account_binding_generation=$7 AND admin_authorization_revision=$8)) AND expires_at>$3 AND group_revision=$4 AND runtime_generation=$5 ORDER BY expires_at DESC LIMIT 1",
           [
             group.id,
             lineId,
             this.store.now(),
             group.revision,
             runtime.generation,
+            authority?.allowed && authority.bound
+              ? authority.actorUserId
+              : null,
+            authority?.bindingGeneration ?? null,
+            authority?.adminAuthorizationRevision ?? null,
           ],
         )
       ).rows[0];
@@ -414,7 +426,12 @@ export class Registration {
     });
   }
   notice(intent: Intent) {
-    const text = `群組設定確認：啟用期間收錄全體成員的新訊息與附件，從發布起保存 90 天；現在及未來成員可查詢有效資料。附件不掃描病毒、不轉檔，圖片／影音只收錄資訊，不辨識內容；PDF 僅擷取內嵌文字、試算表僅讀值。查詢可能交由 OpenAI／Azure 處理。成員可預覽確認刪除本人資料；網站全域管理員可暫停、恢復或刪除。暫停停收停讀、期限照算；恢復不回補，不主動推播。${intent.sharing_enabled ? `Presenter 媒體分享對象：${intent.audience?.join("、") || "無讀者"}；角色讀者隨目前角色成員變更。授權者可下載至裝置，沿用原 90 天期限；切換資料集不搬移歷史素材。` : "Presenter 分享關閉。"}已匯出的離線副本無法即時收回。${intent.add_reader ? `公告成功後新增${intent.add_reader.type === "role" ? "角色" : "使用者"}讀者：${intent.add_reader.label}（${intent.add_reader.id}）。` : ""}`;
+    const text = `群組啟用確認
+• 收錄全體成員的新訊息與附件，保存 90 天；現在與未來成員均可查詢。
+• 附件不掃描病毒、不轉檔；不辨識圖片或影音，只讀 PDF 內嵌文字與試算表值。查詢可能交由 OpenAI／Azure 處理。
+• ${intent.sharing_enabled ? "分享至 Presenter 資料夾，依現有讀取權限授權使用者與角色成員同步；角色成員變更會影響存取。切換資料夾不搬移舊素材。" : "不分享至 Presenter。"}${intent.add_reader ? `確認後新增讀取權限：${intent.add_reader.label}。` : ""}
+• 成員可預覽確認刪除自己的資料，管理員可暫停、恢復或刪除群組。暫停會停止收錄與讀取，90 天期限照算；恢復不回補，不主動推播。已匯出的離線副本無法即時收回。`;
+
     if (text.length > 4500) throw Error("audience_too_large");
     return text;
   }
