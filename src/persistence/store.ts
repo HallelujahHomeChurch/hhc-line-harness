@@ -167,8 +167,8 @@ export class Store {
       )
         return;
       const source = await client.query(
-        `INSERT INTO sources(group_id,message_id,author_id,kind,body,file_name,byte_size,published_at,expires_at,state,publication_collection_id,publication_acl_revision,publication_binding_generation)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT DO NOTHING RETURNING id,revision`,
+        `INSERT INTO sources(group_id,message_id,author_id,kind,body,file_name,byte_size,published_at,expires_at,state,publication_collection_id,publication_acl_revision,publication_binding_generation,quoted_message_id,conversation_signal,event_id)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) ON CONFLICT DO NOTHING RETURNING id,revision`,
         [
           group.id,
           message.id,
@@ -183,6 +183,13 @@ export class Store {
           group.sharing_enabled ? group.collection_id : null,
           group.sharing_enabled ? group.acl_revision : null,
           group.sharing_enabled ? group.binding_generation : null,
+          message.quotedMessageId ?? null,
+          message.mentionsBot
+            ? "bot"
+            : message.mentionsOthers
+              ? "peer"
+              : "ordinary",
+          event.id,
         ],
       );
       if (source.rowCount && message.quotedMessageId) {

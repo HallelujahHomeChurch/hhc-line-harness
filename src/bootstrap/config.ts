@@ -67,6 +67,17 @@ export function loadWorkerConfig(env: NodeJS.ProcessEnv): WorkerConfig {
   };
 }
 export function loadConfig(env: NodeJS.ProcessEnv) {
+  const groupTurnsGroups = (env.GROUP_TURNS_GROUP_IDS ?? "")
+    .split(",")
+    .filter(Boolean);
+  if (
+    groupTurnsGroups.length > 20 ||
+    new Set(groupTurnsGroups).size !== groupTurnsGroups.length ||
+    groupTurnsGroups.some(
+      (id) => !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id),
+    )
+  )
+    throw Error("Invalid GROUP_TURNS_GROUP_IDS");
   const rawPort = env.PORT ?? "3000",
     port = Number(rawPort),
     host = env.HOST ?? "127.0.0.1";
@@ -77,6 +88,7 @@ export function loadConfig(env: NodeJS.ProcessEnv) {
   if (enabled(env)) {
     runtime = {
       ...shared(env),
+      groupTurnsGroups,
       agent: loadAgentConfig(env),
       embeddings: loadEmbeddingConfig(env),
       botId: required(env, "LINE_BOT_ID"),

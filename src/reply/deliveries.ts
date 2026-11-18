@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
-import type { ReplyAction } from "../providers/line.ts";
+import {
+  liveTurnDependencies,
+  closeGroupTurns,
+  type PublicTurnDraft,
+} from "../domain/group-turns.ts";
+import type { ReplyReceipt, ReplyAction } from "../providers/line.ts";
 import type { Store } from "../persistence/store.ts";
 
 export class Deliveries {
@@ -50,17 +55,40 @@ export class Deliveries {
     id: string,
     text: string,
     actions?: ReplyAction[],
+    options?: { publicTurn?: PublicTurnDraft; quoteToken?: string },
   ): Promise<void> {
     if (!text.trim() || text.length > 5000) throw new Error("invalid_reply");
     await this.store.pool.query(
-      "UPDATE deliveries SET body=$2,actions=$4 WHERE id=$1 AND state='pending' AND expires_at>$3 AND body IS NULL",
-      [id, text, this.store.now(), actions ? JSON.stringify(actions) : null],
+      "UPDATE deliveries SET body=$2,actions=$4,turn_ciphertext=$5,quote_token_ciphertext=$6 WHERE id=$1 AND state='pending' AND expires_at>$3 AND body IS NULL",
+      [
+        id,
+        text,
+        this.store.now(),
+        actions ? JSON.stringify(actions) : null,
+        options?.publicTurn
+          ? this.store.cipher.sealPayload(
+              JSON.stringify({ ...options.publicTurn, answer: text }),
+              `delivery-turn:${id}`,
+            )
+          : null,
+        options?.quoteToken
+          ? this.store.cipher.sealPayload(
+              options.quoteToken,
+              `delivery-quote:${id}`,
+            )
+          : null,
+      ],
     );
   }
-  async reserve(
-    id: string,
-  ): Promise<
-    { token: string; text: string; actions?: ReplyAction[] } | undefined
+  async reserve(id: string): Promise<
+    | {
+        token: string;
+        text: string;
+        actions?: ReplyAction[];
+        publicTurn?: PublicTurnDraft;
+        quoteToken?: string;
+      }
+    | undefined
   > {
     return this.store.transaction(async (client) => {
       const runtime = (
@@ -206,12 +234,82 @@ export class Deliveries {
         return;
       }
       if (!row.body) return;
+      const publicTurn = row.turn_ciphertext
+        ? (JSON.parse(
+            this.store.cipher.openPayload(
+              row.turn_ciphertext,
+              `delivery-turn:${id}`,
+            ),
+          ) as PublicTurnDraft)
+        : undefined;
+      if (
+        publicTurn &&
+        (group?.state !== "active" ||
+          !(await liveTurnDependencies(
+            client,
+            publicTurn.dependencies,
+            row.group_id,
+            now,
+          )))
+      ) {
+        await client.query(
+          "UPDATE deliveries SET state='cancelled',body=NULL,actions=NULL,token_ciphertext=NULL,turn_ciphertext=NULL,quote_token_ciphertext=NULL WHERE id=$1",
+          [id],
+        );
+        return;
+      }
+      if (publicTurn?.parent) {
+        const parent = (
+          await client.query(
+            "SELECT * FROM group_turns WHERE id=$1 AND group_id=$2 FOR UPDATE",
+            [publicTurn.parent.id, row.group_id],
+          )
+        ).rows[0];
+        const oldClaim = parent?.claimed_by
+          ? (
+              await client.query("SELECT state FROM deliveries WHERE id=$1", [
+                parent.claimed_by,
+              ])
+            ).rows[0]
+          : undefined;
+        if (
+          !parent ||
+          parent.actor_id !== row.actor_id ||
+          parent.version !== publicTurn.parent.version ||
+          parent.follow_up !== "awaiting" ||
+          parent.consumed_by ||
+          !parent.answer_ciphertext ||
+          (oldClaim && ["pending", "attempt_reserved"].includes(oldClaim.state))
+        ) {
+          await client.query(
+            "UPDATE deliveries SET state='cancelled',body=NULL,actions=NULL,token_ciphertext=NULL,turn_ciphertext=NULL,quote_token_ciphertext=NULL WHERE id=$1",
+            [id],
+          );
+          return;
+        }
+        await client.query("UPDATE group_turns SET claimed_by=$2 WHERE id=$1", [
+          parent.id,
+          id,
+        ]);
+      }
       const token = this.store.cipher.open(row.token_ciphertext, id);
+      const quoteToken = row.quote_token_ciphertext
+        ? this.store.cipher.openPayload(
+            row.quote_token_ciphertext,
+            `delivery-quote:${id}`,
+          )
+        : undefined;
       await client.query(
         "UPDATE deliveries SET state='attempt_reserved',attempted_at=$2,token_ciphertext=NULL,body=NULL,actions=NULL WHERE id=$1",
         [id, now],
       );
-      return { token, text: row.body, actions: row.actions ?? undefined };
+      return {
+        token,
+        text: row.body,
+        actions: row.actions ?? undefined,
+        publicTurn,
+        quoteToken,
+      };
     });
   }
   async deliver(
@@ -220,21 +318,150 @@ export class Deliveries {
       token: string,
       text: string,
       actions?: ReplyAction[],
-    ) => Promise<void>,
+      options?: { quoteToken?: string },
+    ) => Promise<ReplyReceipt | void>,
   ): Promise<"delivered" | "unknown" | undefined> {
     const attempt = await this.reserve(id);
     if (!attempt) return;
     let state: "delivered" | "unknown" = "unknown";
+    let receipt: ReplyReceipt | void;
     try {
-      await send(attempt.token, attempt.text, attempt.actions);
-      state = "delivered";
+      receipt = await send(attempt.token, attempt.text, attempt.actions, {
+        quoteToken: attempt.quoteToken,
+      });
+      const ids = receipt?.messageIds;
+      if (
+        !attempt.publicTurn ||
+        (ids?.length &&
+          ids.length <= 5 &&
+          new Set(ids).size === ids.length &&
+          ids.every((id) => /^[A-Za-z0-9_-]{1,128}$/.test(id)))
+      )
+        state = "delivered";
     } catch {
-      /* Ambiguous failures consume the one application attempt. */
+      /* Ambiguous sends never retry. */
     }
-    await this.store.pool.query(
-      "UPDATE deliveries SET state=$2,finished_at=$3 WHERE id=$1 AND state='attempt_reserved'",
-      [id, state, this.store.now()],
-    );
-    return state;
+    try {
+      return await this.store.transaction(async (c) => {
+        const runtime = (await c.query("SELECT * FROM runtime_state FOR SHARE"))
+          .rows[0];
+        const identity = (
+          await c.query("SELECT group_id FROM deliveries WHERE id=$1", [id])
+        ).rows[0];
+        const group = identity?.group_id
+          ? (
+              await c.query("SELECT * FROM groups WHERE id=$1 FOR SHARE", [
+                identity.group_id,
+              ])
+            ).rows[0]
+          : undefined;
+        const draft = attempt.publicTurn;
+        const live =
+          draft &&
+          group?.state === "active" &&
+          (await liveTurnDependencies(
+            c,
+            draft.dependencies,
+            group.id,
+            this.store.now(),
+          ));
+        const row = (
+          await c.query(
+            "UPDATE deliveries SET state=$2,finished_at=$3,turn_ciphertext=NULL,quote_token_ciphertext=NULL WHERE id=$1 AND state='attempt_reserved' RETURNING *",
+            [id, state, this.store.now()],
+          )
+        ).rows[0];
+        if (!row) return undefined;
+        const parent = draft?.parent
+          ? (
+              await c.query(
+                "SELECT * FROM group_turns WHERE id=$1 FOR UPDATE",
+                [draft.parent.id],
+              )
+            ).rows[0]
+          : undefined;
+        const parentValid =
+          !draft?.parent ||
+          (parent?.claimed_by === id &&
+            parent.version === draft.parent.version &&
+            !parent.consumed_by);
+        if (
+          parentValid &&
+          state === "delivered" &&
+          draft &&
+          live &&
+          runtime.mode === "open" &&
+          row.runtime_generation === runtime.generation &&
+          row.group_revision === group.revision
+        ) {
+          if (draft.parent)
+            await c.query(
+              "UPDATE group_turns SET consumed_by=$2,claimed_by=NULL WHERE id=$1 AND claimed_by=$2",
+              [draft.parent.id, id],
+            );
+          if (draft.followUp === "closed")
+            await closeGroupTurns(
+              c,
+              row.group_id,
+              row.actor_id,
+              new Date(draft.publishedAt),
+              row.event_id,
+            );
+          const expires = new Date(
+            Math.min(
+              new Date(draft.publishedAt).getTime() + 90 * 86400000,
+              ...draft.dependencies.map((d) => Date.parse(d.expiresAt)),
+            ),
+          );
+          await c.query(
+            `INSERT INTO group_turns(id,group_id,actor_id,group_revision,runtime_generation,message_id,event_at,delivered_at,line_message_ids,question_ciphertext,answer_ciphertext,kind,follow_up,dependencies,source_ids,expires_at,event_id)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+            [
+              id,
+              row.group_id,
+              row.actor_id,
+              row.group_revision,
+              row.runtime_generation,
+              draft.messageId,
+              draft.publishedAt,
+              this.store.now(),
+              receipt!.messageIds,
+              this.store.cipher.sealPayload(
+                draft.question,
+                `turn-question:${id}`,
+              ),
+              this.store.cipher.sealPayload(attempt.text, `turn-answer:${id}`),
+              draft.kind,
+              draft.followUp,
+              JSON.stringify(draft.dependencies),
+              draft.dependencies.map((d) => d.id),
+              expires,
+              row.event_id,
+            ],
+          );
+        }
+        if (draft?.parent)
+          await c.query(
+            "UPDATE group_turns SET claimed_by=NULL WHERE id=$1 AND claimed_by=$2",
+            [draft.parent.id, id],
+          );
+        return state;
+      });
+    } catch {
+      // COMMIT may have succeeded. Read proof on a fresh connection, never send again.
+      const row = (
+        await this.store.pool.query(
+          "SELECT state FROM deliveries WHERE id=$1",
+          [id],
+        )
+      ).rows[0];
+      if (row?.state === "delivered" || row?.state === "unknown")
+        return row.state as "delivered" | "unknown";
+      await this.store.pool.query(
+        "UPDATE deliveries SET state='unknown',turn_ciphertext=NULL,quote_token_ciphertext=NULL,finished_at=$2 WHERE id=$1 AND state='attempt_reserved'",
+        [id, this.store.now()],
+      );
+      return "unknown";
+    }
   }
 }

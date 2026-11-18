@@ -35,10 +35,22 @@ export type SourceProposal =
   | { sourceId: string; kind: "delete" }
   | { sourceId: string; kind: "description"; text: string };
 export interface ConversationTurn {
+  eventId?: string;
+  speaker?: string;
+  at?: string;
+  kind?: string;
+  followUp?: string;
+  turnId?: string;
   user: string;
   assistant: string;
 }
 export interface SearchResult {
+  turn?: {
+    kind: "answer" | "clarification" | "silent";
+    followUp: "continue" | "awaiting" | "closed";
+    answersPending?: boolean;
+    answeredPending?: { id: string; version: string };
+  };
   answer?: string;
   dependencies?: Pick<
     SearchItem,

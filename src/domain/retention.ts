@@ -11,6 +11,14 @@ export class Retention {
         await c.query("SELECT mode FROM runtime_state FOR UPDATE")
       ).rows[0];
       if (runtime?.mode === "restoring") return;
+      await c.query(
+        "UPDATE group_turns SET question_ciphertext=NULL,answer_ciphertext=NULL,follow_up='closed',version=version+1 WHERE expires_at<=$1 AND answer_ciphertext IS NOT NULL",
+        [this.store.now()],
+      );
+      await c.query(
+        "UPDATE deliveries SET turn_ciphertext=NULL,quote_token_ciphertext=NULL WHERE expires_at<=$1 AND (turn_ciphertext IS NOT NULL OR quote_token_ciphertext IS NOT NULL)",
+        [this.store.now()],
+      );
       const now = this.store.now(),
         day = new Date(now.getTime() - DAY),
         idle = new Date(now.getTime() - 30 * 60000),

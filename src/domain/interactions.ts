@@ -1,3 +1,8 @@
+import type {
+  GroupTurns,
+  TurnRequest,
+  PublicTurnDraft,
+} from "./group-turns.ts";
 import type { AdminQueries } from "./admin-queries.ts";
 import type { SourceEdits } from "./source-edits.ts";
 import type { Conversations } from "./conversations.ts";
@@ -7,9 +12,10 @@ import type { PoolClient } from "pg";
 import type { Store, IntakeGroup } from "../persistence/store.ts";
 import type { LineEvent } from "./events.ts";
 import { Registration } from "./registration.ts";
-import type { ReplyAction } from "../providers/line.ts";
+import type { ReplyReceipt, ReplyAction } from "../providers/line.ts";
 import { Deliveries } from "../reply/deliveries.ts";
 interface Ports {
+  groupTurns?: GroupTurns;
   adminQueries?: AdminQueries;
   conversations?: Conversations;
   sourceEdits?: SourceEdits;
@@ -22,7 +28,12 @@ interface Ports {
     result: "ok" | "failed",
     eventId: string,
   ) => Promise<void>;
-  send: (token: string, text: string, actions?: ReplyAction[]) => Promise<void>;
+  send: (
+    token: string,
+    text: string,
+    actions?: ReplyAction[],
+    options?: { quoteToken?: string },
+  ) => Promise<ReplyReceipt | void>;
   adminOrigin: string;
 }
 interface Interaction {
@@ -35,6 +46,7 @@ interface Interaction {
   delivery_id: string | null;
   fence: string;
   search_result_id: string | null;
+  published_at: Date;
 }
 export class Interactions {
   readonly store: Store;
@@ -56,6 +68,10 @@ export class Interactions {
     group?: IntakeGroup,
   ): Promise<void> {
     if (!event.actorId || event.scope === "room") return;
+    const turnRequest =
+      group && event.type === "message"
+        ? await this.ports.groupTurns?.candidate(c, event, group)
+        : undefined;
     let kind: string | undefined;
     let payload: unknown = {};
     if (event.type === "accountLink" && event.accountLink) {
@@ -129,8 +145,8 @@ export class Interactions {
     } else if (
       event.scope === "group" &&
       group?.state === "active" &&
-      event.message?.mentionsBot &&
-      event.message.text
+      event.message?.text &&
+      (event.message.mentionsBot || turnRequest)
     ) {
       kind = /^(?:@\S+\s+)?(?:重設對話|重置對話)\s*$/.test(event.message.text)
         ? "conversation-reset"
@@ -141,6 +157,8 @@ export class Interactions {
         messageId: event.message.id,
         useAgent: true,
         query: event.message.text,
+        turnRequest,
+        quoteToken: event.message.quoteToken,
       };
     } else if (
       event.scope === "group" &&
@@ -190,8 +208,8 @@ export class Interactions {
         })
       : undefined;
     await c.query(
-      `INSERT INTO interactions(id,channel_id,event_id,actor_id,scope_id,runtime_generation,kind,payload_ciphertext,delivery_id,created_at,expires_at)
-   SELECT $1,$2,$3,$4,$5,generation,$6,$7,$8,$9,$10 FROM runtime_state WHERE mode='open'`,
+      `INSERT INTO interactions(id,channel_id,event_id,actor_id,scope_id,runtime_generation,kind,payload_ciphertext,delivery_id,created_at,expires_at,published_at,routing_reason)
+   SELECT $1,$2,$3,$4,$5,generation,$6,$7,$8,$9,$10,$11,$12 FROM runtime_state WHERE mode='open'`,
       [
         id,
         this.store.channelId,
@@ -206,6 +224,8 @@ export class Interactions {
         delivery,
         this.store.now(),
         new Date(this.store.now().getTime() + 10 * 60_000),
+        event.publishedAt,
+        turnRequest?.mode ?? kind,
       ],
     );
   }
@@ -255,6 +275,8 @@ export class Interactions {
     const row = await this.claim();
     if (!row) return false;
     let state = "completed";
+    let mayReply = true;
+    let replyKind = "silent";
     try {
       const payload = JSON.parse(
         this.store.cipher.openPayload(
@@ -263,6 +285,8 @@ export class Interactions {
         ),
       ) as {
         messageId?: string;
+        turnRequest?: TurnRequest;
+        quoteToken?: string;
         edit?: { kind: "description"; text: string } | { kind: "delete" };
         query?: string;
         useAgent?: boolean;
@@ -274,6 +298,9 @@ export class Interactions {
         nonce?: string;
         result?: "ok" | "failed";
       };
+      mayReply =
+        !payload.turnRequest || payload.turnRequest.mode === "explicit";
+      let publicTurn: PublicTurnDraft | undefined;
       let beforeReply: (() => Promise<unknown>) | undefined;
       let text: string | undefined;
       let actions: ReplyAction[] | undefined;
@@ -356,8 +383,19 @@ export class Interactions {
           )
         ).rows[0];
         if (!group) throw new Error("search_forbidden");
+        beforeReply = () => conversations.search.scope(group.id, row.actor_id);
+        if (
+          payload.turnRequest &&
+          !conversations.groupTurns.enabled(group.id)
+        ) {
+          mayReply = false;
+          throw Error("turns_disabled");
+        }
         if (row.kind === "conversation-reset") {
-          await conversations.reset(group.id, row.actor_id, row);
+          await conversations.reset(group.id, row.actor_id, row, {
+            at: row.published_at,
+            eventId: row.event_id,
+          });
           text = "已重設你的本群組對話；群組原始資料仍保留。";
         } else if (row.kind === "search" && !row.search_result_id) {
           if (!row.delivery_id) throw new Error("reply_expired");
@@ -374,6 +412,7 @@ export class Interactions {
             row,
             excluded,
             payload.useAgent,
+            payload.turnRequest,
           );
           return true;
         } else if (row.kind === "search-list") {
@@ -415,7 +454,44 @@ export class Interactions {
             group.id,
             row,
           );
-          if (status.result) {
+          beforeReply = () =>
+            conversations.read(resultId, row.actor_id, group.id);
+          replyKind =
+            row.kind === "search-get"
+              ? "pickup"
+              : status.result?.status === "unavailable"
+                ? "error"
+                : (status.result?.turn?.kind ??
+                  (status.result ? "answer" : "pickup"));
+          if (status.result?.turn?.kind === "silent") {
+            await this.store.pool.query(
+              "UPDATE deliveries SET state='cancelled',token_ciphertext=NULL,body=NULL,actions=NULL WHERE id=$1 AND state='pending'",
+              [row.delivery_id],
+            );
+          } else if (row.kind === "search-get") {
+            text = this.ports.liffId
+              ? "請開啟私人結果頁查看；只有提出查詢的本人能領取。"
+              : "結果已受理，目前沒有可用的私人領取入口。";
+            if (this.ports.liffId)
+              actions = [
+                {
+                  label: "查看私人回答",
+                  uri: `https://liff.line.me/${this.ports.liffId}?group=${group.id}&result=${resultId}`,
+                },
+              ];
+          } else if (
+            !status.result &&
+            payload.turnRequest &&
+            payload.turnRequest.mode !== "explicit"
+          ) {
+            if (status.state !== "failed") {
+              await this.store.pool.query(
+                "UPDATE interactions SET state='queued',lease_until=NULL WHERE id=$1 AND fence=$2 AND state='running'",
+                [row.id, row.fence],
+              );
+              return true;
+            }
+          } else if (status.result) {
             text =
               status.result.answer ??
               (status.result.items
@@ -434,23 +510,81 @@ export class Interactions {
               status.state === "failed"
                 ? "查詢暫時無法完成，請重新提出查詢。"
                 : "還在處理，稍後可點下方查看回答。";
-          if (!status.result && status.state !== "failed")
+          if (
+            row.kind !== "search-get" &&
+            (!payload.turnRequest || payload.turnRequest.mode === "explicit") &&
+            !status.result &&
+            status.state !== "failed"
+          )
             actions = [{ label: "查看回答", data: `search:get:${resultId}` }];
-          if (status.result?.items.length && this.ports.liffId)
+          if (
+            row.kind !== "search-get" &&
+            status.result?.turn?.kind !== "silent" &&
+            status.result?.items.length &&
+            this.ports.liffId
+          )
             actions = [
               {
                 label: "查看資料",
                 uri: `https://liff.line.me/${this.ports.liffId}?group=${group.id}&result=${resultId}`,
               },
             ];
-          if (status.result?.gaps.includes("agent_unavailable_basic_search"))
+          if (
+            row.kind !== "search-get" &&
+            text &&
+            status.result?.gaps.includes("agent_unavailable_basic_search")
+          )
             text += "\n智能查詢暫時無法完成，目前顯示關鍵字搜尋結果。";
-          if (status.result?.proposal) {
+          if (row.kind !== "search-get" && status.result?.proposal) {
             text += "\n有一項變更草稿；尚未修改資料，請先預覽。";
             (actions ??= []).push({
               label: "預覽變更草稿",
               data: `agent:preview:${resultId}`,
             });
+          }
+          if (
+            text &&
+            row.kind === "search" &&
+            payload.turnRequest &&
+            status.result &&
+            status.result.status !== "unavailable" &&
+            !status.result.proposal &&
+            status.result.turn?.kind !== "silent"
+          ) {
+            const source = (
+              await this.store.pool.query(
+                "SELECT id,revision,description_revision,expires_at FROM sources WHERE group_id=$1 AND message_id=$2 AND state='ready'",
+                [group.id, payload.messageId],
+              )
+            ).rows[0];
+            if (!source) throw Error("search_gone");
+            const dependencies = [
+              ...new Map(
+                [
+                  ...(status.result.dependencies ?? []),
+                  {
+                    id: source.id,
+                    revision: source.revision,
+                    descriptionRevision: source.description_revision,
+                    expiresAt: source.expires_at.toISOString(),
+                  },
+                ].map((d) => [d.id, d]),
+              ).values(),
+            ];
+            publicTurn = {
+              messageId: payload.messageId!,
+              publishedAt: payload.turnRequest.publishedAt,
+              question: payload.query!,
+              kind:
+                status.result.turn?.kind === "clarification"
+                  ? "clarification"
+                  : "answer",
+              followUp: status.result.turn?.followUp ?? "continue",
+              dependencies,
+              ...(status.result.turn?.answeredPending
+                ? { parent: status.result.turn.answeredPending }
+                : {}),
+            };
           }
         }
       } else if (
@@ -660,13 +794,31 @@ export class Interactions {
         }
       }
       if (text && row.delivery_id) {
-        await this.deliveries.prepare(row.delivery_id, text, actions);
+        await this.deliveries.prepare(row.delivery_id, text, actions, {
+          publicTurn,
+          quoteToken: payload.quoteToken,
+        });
         await beforeReply?.();
         await this.deliveries.deliver(row.delivery_id, this.ports.send);
-      }
+      } else if (row.delivery_id)
+        await this.store.pool.query(
+          "UPDATE deliveries SET state='cancelled',token_ciphertext=NULL,body=NULL,actions=NULL,turn_ciphertext=NULL,quote_token_ciphertext=NULL WHERE id=$1 AND state='pending'",
+          [row.delivery_id],
+        );
     } catch {
       state = "failed";
-      if (row.delivery_id) {
+      replyKind = mayReply ? "error" : "silent";
+      if (row.delivery_id)
+        await this.store.pool.query(
+          "UPDATE deliveries SET body=NULL,actions=NULL,turn_ciphertext=NULL,quote_token_ciphertext=NULL WHERE id=$1 AND state='pending'",
+          [row.delivery_id],
+        );
+      if (row.delivery_id && !mayReply)
+        await this.store.pool.query(
+          "UPDATE deliveries SET state='cancelled',token_ciphertext=NULL WHERE id=$1 AND state='pending'",
+          [row.delivery_id],
+        );
+      if (row.delivery_id && mayReply) {
         await this.deliveries.prepare(
           row.delivery_id,
           [
@@ -684,8 +836,8 @@ export class Interactions {
       }
     }
     await this.store.pool.query(
-      "UPDATE interactions SET state=$3,payload_ciphertext=NULL WHERE id=$1 AND fence=$2 AND state='running'",
-      [row.id, row.fence, state],
+      "UPDATE interactions SET state=$3,payload_ciphertext=NULL,lease_until=NULL,reply_kind=$4,finished_at=$5 WHERE id=$1 AND fence=$2 AND state='running'",
+      [row.id, row.fence, state, replyKind, this.store.now()],
     );
     return true;
   }

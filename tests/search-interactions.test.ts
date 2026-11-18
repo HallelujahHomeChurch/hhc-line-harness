@@ -102,7 +102,8 @@ test(
     await store.ingest(pickup, (c, e, g) => interactions.record(c, e, g));
     await interactions.processOne();
     assert.equal(sent.length, 2);
-    assert.match(sent[1]!.text, /十二月同工排班已公告/);
+    assert.doesNotMatch(sent[1]!.text, /十二月同工排班已公告/);
+    assert.match(sent[1]!.actions![0]!.uri!, /^https:\/\/liff.line.me\//);
     assert.doesNotMatch(sent[1]!.text, /@Bot 查詢/);
     await ingest("latest", "@Bot 查看結果", true);
     await interactions.processOne();

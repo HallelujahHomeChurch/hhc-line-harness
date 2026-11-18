@@ -739,3 +739,352 @@ test(
     assert.equal(result.items[0]?.versions[0]?.producer, "model");
   },
 );
+test(
+  "candidate addressing and answer share one persisted model sequence with tools unavailable until decided",
+  { skip: !databaseEnabled },
+  async (t) => {
+    let calls = 0;
+    const f = await fixture(t, async (request) => {
+      calls++;
+      const output =
+        calls === 1
+          ? { recipient: "bot" }
+          : {
+              answer: "已改短。",
+              selected: [],
+              proposal: null,
+              kind: "answer",
+              followUp: "continue",
+              answersPending: false,
+            };
+      if (calls === 1) assert.equal(request.tools.length, 0);
+      else assert.ok(request.tools.length > 0);
+      return reply([
+        {
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: JSON.stringify(output) }],
+        },
+      ]);
+    });
+    const id = randomUUID();
+    const result = await f.agent.query(
+      id,
+      f.group,
+      actor,
+      { query: "把那份草稿改短" },
+      async () => {},
+      undefined,
+      undefined,
+      [],
+      {
+        actor: "member_a",
+        mode: "candidate",
+        quoteMissing: false,
+        history: [{ user: "寫草稿", assistant: "公開草稿" }],
+        messages: [],
+        dependencies: [],
+      },
+    );
+    assert.equal(result.answer, "已改短。");
+    assert.equal(calls, 2);
+    assert.deepEqual(
+      (
+        await f.pool.query(
+          "SELECT ordinal,state FROM model_steps WHERE run_id=$1 ORDER BY ordinal",
+          [id],
+        )
+      ).rows,
+      [
+        { ordinal: 0, state: "completed" },
+        { ordinal: 1, state: "completed" },
+      ],
+    );
+  },
+);
+test(
+  "uncertain receiver and failed candidate classifier never produce a public answer or content tools",
+  { skip: !databaseEnabled },
+  async (t) => {
+    for (const fail of [false, true]) {
+      let calls = 0;
+      const f = await fixture(t, async (request) => {
+        calls++;
+        assert.equal(request.tools.length, 0);
+        if (fail) throw Error("candidate model unavailable");
+        return reply([
+          {
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [
+              {
+                type: "output_text",
+                text: JSON.stringify({ recipient: "uncertain" }),
+              },
+            ],
+          },
+        ]);
+      });
+      const r = await f.agent.query(
+        randomUUID(),
+        f.group,
+        actor,
+        { query: "那份呢" },
+        async () => {},
+        undefined,
+        undefined,
+        [],
+        {
+          actor: "member_a",
+          mode: "candidate",
+          quoteMissing: false,
+          history: [],
+          messages: [],
+          dependencies: [],
+        },
+      );
+      assert.equal(r.turn?.kind, "silent");
+      assert.equal(r.answer, undefined);
+      assert.equal(calls, 1);
+    }
+  },
+);
+test(
+  "implicit continuation answers in one request without offering tools before recipient decision",
+  { skip: !databaseEnabled },
+  async (t) => {
+    let calls = 0;
+    const f = await fixture(t, async (request) => {
+      calls++;
+      assert.equal(request.tools.length, 0);
+      return reply([
+        {
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [
+            {
+              type: "output_text",
+              text: JSON.stringify({
+                answer: "可以整理文字。",
+                selected: [],
+                proposal: null,
+                kind: "answer",
+                followUp: "continue",
+                answersPending: false,
+              }),
+            },
+          ],
+        },
+      ]);
+    });
+    const r = await f.agent.query(
+      randomUUID(),
+      f.group,
+      actor,
+      { query: "你能幫我做什麼？" },
+      async () => {},
+      undefined,
+      undefined,
+      [],
+      {
+        actor: "member_a",
+        mode: "implicit",
+        quoteMissing: false,
+        history: [{ user: "Hi", assistant: "你好！" }],
+        messages: [],
+        dependencies: [],
+      },
+    );
+    assert.equal(r.answer, "可以整理文字。");
+    assert.equal(calls, 1);
+  },
+);
+test(
+  "candidate classifier retains the tail question of a long pending answer",
+  { skip: !databaseEnabled },
+  async (t) => {
+    let calls = 0;
+    const f = await fixture(t, async (request) => {
+      calls++;
+      if (calls === 1)
+        assert.match(JSON.stringify(request.input), /活動是哪一天/);
+      const value =
+        calls === 1
+          ? { recipient: "bot" }
+          : {
+              answer: "已安排星期日。",
+              selected: [],
+              proposal: null,
+              kind: "answer",
+              followUp: "continue",
+              answersPending: true,
+            };
+      return reply([
+        {
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: JSON.stringify(value) }],
+        },
+      ]);
+    });
+    const result = await f.agent.query(
+      randomUUID(),
+      f.group,
+      actor,
+      { query: "星期日" },
+      async () => {},
+      undefined,
+      undefined,
+      [],
+      {
+        actor: "member_a",
+        mode: "candidate",
+        quoteMissing: false,
+        parentId: "parent",
+        canAnswerPending: true,
+        history: [
+          {
+            user: "安排活動",
+            assistant: "draft ".repeat(300) + "活動是哪一天？",
+            followUp: "awaiting",
+            turnId: "parent",
+          },
+        ],
+        messages: [],
+        dependencies: [],
+      },
+    );
+    assert.equal(result.answer, "已安排星期日。");
+    assert.equal(calls, 2);
+  },
+);
+test(
+  "pending recipient decision also sees a newer public draft from another topic",
+  { skip: !databaseEnabled },
+  async (t) => {
+    let calls = 0;
+    const f = await fixture(t, async (request) => {
+      calls++;
+      if (calls === 1)
+        assert.match(JSON.stringify(request.input), /新人歡迎草稿/);
+      const value =
+        calls === 1
+          ? { recipient: "bot" }
+          : {
+              answer: "已縮短新人歡迎草稿。",
+              selected: [],
+              proposal: null,
+              kind: "answer",
+              followUp: "continue",
+              answersPending: false,
+            };
+      return reply([
+        {
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: JSON.stringify(value) }],
+        },
+      ]);
+    });
+    const result = await f.agent.query(
+      randomUUID(),
+      f.group,
+      actor,
+      { query: "把那份草稿改短" },
+      async () => {},
+      undefined,
+      undefined,
+      [],
+      {
+        actor: "member_a",
+        mode: "candidate",
+        quoteMissing: false,
+        parentId: "pending-date",
+        canAnswerPending: true,
+        history: [
+          {
+            user: "寫歡迎詞",
+            assistant: "新人歡迎草稿",
+            turnId: "newer-draft",
+            followUp: "continue",
+          },
+          {
+            user: "安排活動",
+            assistant: "活動是哪一天？",
+            turnId: "pending-date",
+            followUp: "awaiting",
+          },
+        ],
+        messages: [],
+        dependencies: [],
+      },
+    );
+    assert.equal(result.answer, "已縮短新人歡迎草稿。");
+    assert.equal(result.turn?.answersPending, false);
+    assert.equal(calls, 2);
+  },
+);
+test(
+  "classifier retains every visible owned pending question beyond the latest three",
+  { skip: !databaseEnabled },
+  async (t) => {
+    const ids = Array.from({ length: 4 }, () => randomUUID());
+    let calls = 0;
+    const f = await fixture(t, async (request) => {
+      calls++;
+      if (calls === 1)
+        assert.match(JSON.stringify(request.input), /活動日期是哪一天/);
+      const value =
+        calls === 1
+          ? { recipient: "bot" }
+          : {
+              answer: "活動在星期日。",
+              selected: [],
+              proposal: null,
+              kind: "answer",
+              followUp: "continue",
+              answersPending: ids[0],
+            };
+      return reply([
+        {
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: JSON.stringify(value) }],
+        },
+      ]);
+    });
+    const r = await f.agent.query(
+      randomUUID(),
+      f.group,
+      actor,
+      { query: "活動那份星期日" },
+      async () => {},
+      undefined,
+      undefined,
+      [],
+      {
+        actor: "member_a",
+        mode: "candidate",
+        quoteMissing: false,
+        parentId: ids[3],
+        pendingTurns: ids.map((id) => ({ id, version: "1" })),
+        history: ids.map((id, i) => ({
+          user: "安排",
+          assistant: i === 0 ? "活動日期是哪一天？" : `其他問題${i}？`,
+          turnId: id,
+          followUp: "awaiting",
+        })),
+        messages: [],
+        dependencies: [],
+      },
+    );
+    assert.equal(r.turn?.answeredPending?.id, ids[0]);
+    assert.equal(calls, 2);
+  },
+);
