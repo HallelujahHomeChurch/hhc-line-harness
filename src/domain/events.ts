@@ -18,6 +18,8 @@ export interface Message {
   size?: number;
   quotedMessageId?: string;
   mentionsBot: boolean;
+  mentionsOthers?: boolean;
+  quoteToken?: string;
 }
 export interface LineEvent {
   id: string;
@@ -144,6 +146,10 @@ export function parseEvents(payload: unknown, botId: string): LineEvent[] {
             mention.mentionees.length > 100
           )
             throw new Error("invalid_payload");
+          message.mentionsOthers = mention.mentionees.some((entry: unknown) => {
+            const item = object(entry);
+            return item.type === "user" && item.userId !== botId;
+          });
           message.mentionsBot = mention.mentionees.some((entry: unknown) => {
             const item = object(entry);
             return item.type === "user" && item.userId === botId;
@@ -156,6 +162,8 @@ export function parseEvents(payload: unknown, botId: string): LineEvent[] {
           throw new Error("invalid_payload");
         message.size = Number(m.fileSize);
       }
+      if (m.quoteToken !== undefined)
+        message.quoteToken = string(m.quoteToken, 2048);
       if (m.quotedMessageId !== undefined)
         message.quotedMessageId = opaque(m.quotedMessageId);
       result.message = message;

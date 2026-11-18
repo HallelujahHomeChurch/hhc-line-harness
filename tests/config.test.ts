@@ -101,3 +101,17 @@ test("Audit delivery requires paired HTTPS config and a distinct private credent
     "https://audit.invalid",
   );
 });
+
+test("group-turn rollout validates an explicit bounded allowlist", () => {
+  const base = {
+    DATABASE_URL: "postgresql://localhost/test",
+    LINE_CHANNEL_SECRET: "secret",
+  };
+  for (const value of [
+    "*",
+    "not-a-uuid",
+    "11111111-1111-4111-8111-111111111111,11111111-1111-4111-8111-111111111111",
+  ])
+    assert.throws(() => loadConfig({ ...base, GROUP_TURNS_GROUP_IDS: value }));
+  assert.doesNotThrow(() => loadConfig({ ...base, GROUP_TURNS_GROUP_IDS: "" }));
+});

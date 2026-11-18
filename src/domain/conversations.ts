@@ -1,3 +1,9 @@
+import {
+  GroupTurns,
+  MAX_PUBLIC_DEPENDENCIES,
+  liveTurnDependencies,
+  type TurnRequest,
+} from "./group-turns.ts";
 import { z } from "zod";
 import type { HarnessAgent } from "../agent/agent.ts";
 import { randomUUID } from "node:crypto";
@@ -50,6 +56,7 @@ interface Session {
 }
 interface QueryJob {
   use_agent: boolean;
+  turn_request: TurnRequest | null;
   id: string;
   conversation_id: string;
   conversation_generation: string;
@@ -65,6 +72,7 @@ interface QueryJob {
   attempts: number;
 }
 export class Conversations {
+  readonly groupTurns: GroupTurns;
   readonly store: Store;
   readonly search: Search;
   readonly agent?: Pick<HarnessAgent, "query">;
@@ -72,7 +80,9 @@ export class Conversations {
     store: Store,
     search: Search,
     agent?: Pick<HarnessAgent, "query">,
+    groupTurns?: GroupTurns,
   ) {
+    this.groupTurns = groupTurns ?? new GroupTurns(store, search);
     this.agent = agent;
     this.store = store;
     this.search = search;
@@ -174,6 +184,7 @@ export class Conversations {
     fence?: InteractionFence,
     excludedSourceId?: string,
     useAgent = false,
+    turnRequest?: TurnRequest,
   ) {
     if (useAgent) {
       if (!this.agent) throw new Error("search_unavailable");
@@ -185,6 +196,8 @@ export class Conversations {
       )
         throw new Error("invalid_search");
     } else this.search.validate(input);
+    if (turnRequest && !this.groupTurns.enabled(groupId))
+      throw Error("turns_disabled");
     const scope = await this.search.scope(groupId, actor);
     return this.store.transaction(async (c) => {
       const session = await this.session(
@@ -217,8 +230,8 @@ export class Conversations {
       )
         throw new Error("search_busy");
       await c.query(
-        `INSERT INTO search_jobs(id,conversation_id,conversation_generation,runtime_generation,request_ciphertext,created_at,expires_at,excluded_source_id,use_agent)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        `INSERT INTO search_jobs(id,conversation_id,conversation_generation,runtime_generation,request_ciphertext,created_at,expires_at,excluded_source_id,use_agent,turn_request)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
         [
           id,
           session.id,
@@ -232,6 +245,7 @@ export class Conversations {
           new Date(this.store.now().getTime() + IDLE),
           excludedSourceId ?? null,
           useAgent && Boolean(this.agent),
+          turnRequest ? JSON.stringify(turnRequest) : null,
         ],
       );
       if (fence) {
@@ -247,7 +261,12 @@ export class Conversations {
       return { id, generation: session.generation };
     });
   }
-  async reset(groupId: string, actor: string, fence?: InteractionFence) {
+  async reset(
+    groupId: string,
+    actor: string,
+    fence?: InteractionFence,
+    order?: { at: Date; eventId: string },
+  ) {
     const scope = await this.search.scope(groupId, actor);
     await this.store.transaction(async (c) => {
       const session = await this.session(
@@ -257,9 +276,31 @@ export class Conversations {
         scope.generation,
         fence,
       );
-      await this.clear(c, session, fence?.id);
-      // The reset acknowledgement belongs to the new generation.
-      if (fence) {
+      const at = order?.at ?? this.store.now(),
+        eventId = order?.eventId ?? "";
+      const newer = order
+        ? (
+            await c.query(
+              "SELECT 1 FROM interactions WHERE channel_id=$1 AND actor_id=$2 AND scope_id=$3 AND (published_at,event_id)>($4,$5) AND kind='search' LIMIT 1",
+              [this.store.channelId, actor, scope.line_group_id, at, eventId],
+            )
+          ).rowCount
+        : 0;
+      if (!newer) await this.clear(c, session, fence?.id);
+      else {
+        // A delayed reset may discard older private results, but never the current generation.
+        await c.query(
+          "UPDATE search_jobs SET state='cancelled',fence=fence+1,result_ciphertext=NULL,request_ciphertext=NULL,lease_until=NULL WHERE conversation_id=$1 AND ((turn_request->>'publishedAt')::timestamptz<$2 OR (turn_request->>'publishedAt')::timestamptz=$2 AND coalesce(turn_request->>'eventId','')<=$3)",
+          [session.id, at, eventId],
+        );
+        await c.query(
+          "UPDATE source_edits SET state='cancelled',text_ciphertext=NULL WHERE conversation_id=$1 AND state='preview' AND expires_at<=$2::timestamptz+interval '5 minutes'",
+          [session.id, at],
+        );
+      }
+      await this.groupTurns.close(c, groupId, actor, at, eventId);
+      // A delayed reset acknowledgement stays in the current generation.
+      if (fence && !newer) {
         await c.query(
           "UPDATE interactions SET conversation_generation=$2::bigint+1 WHERE id=$1",
           [fence.id, session.generation],
@@ -283,6 +324,12 @@ export class Conversations {
         [job.conversation_id],
       )
     ).rows[0];
+    if (
+      session &&
+      job.turn_request &&
+      !this.groupTurns.enabled(session.group_id)
+    )
+      throw Error("turns_disabled");
     const runtime = (await c.query("SELECT * FROM runtime_state")).rows[0];
     if (actor !== undefined && session?.actor_id !== actor)
       throw new Error("search_forbidden");
@@ -394,6 +441,25 @@ export class Conversations {
           throw new Error("search_gone");
       }
       await this.valid(c, job, actor, true);
+      const decoded =
+        job.state === "ready" && job.result_ciphertext
+          ? (JSON.parse(
+              this.store.cipher.openPayload(
+                job.result_ciphertext,
+                `search-result:${job.id}`,
+              ),
+            ) as SearchResult)
+          : undefined;
+      if (
+        decoded?.dependencies &&
+        !(await liveTurnDependencies(
+          c,
+          decoded.dependencies,
+          initial.session.group_id,
+          this.store.now(),
+        ))
+      )
+        throw Error("search_gone");
       if (fence)
         await c.query(
           "UPDATE deliveries SET search_result_id=$2 WHERE id=(SELECT delivery_id FROM interactions WHERE id=$1)",
@@ -605,7 +671,24 @@ export class Conversations {
       let previous: SearchResult | undefined;
       let history: ConversationTurn[] = [];
       let priorDependencies: NonNullable<SearchResult["dependencies"]> = [];
-      if (job.use_agent && this.agent) {
+      const turnContext = job.turn_request
+        ? await this.groupTurns.context(
+            session.group_id,
+            session.actor_id,
+            job.turn_request,
+          )
+        : undefined;
+      if (turnContext) {
+        history = turnContext.history;
+        priorDependencies = turnContext.dependencies;
+        previous = {
+          status: "success",
+          items: [],
+          gaps: [],
+          dependencies: priorDependencies,
+        };
+      }
+      if (!turnContext && job.use_agent && this.agent) {
         const checkpoint = await this.checkpoint(
           session.group_id,
           session.actor_id,
@@ -646,8 +729,30 @@ export class Conversations {
             dependencies: priorDependencies,
           };
       }
-      const result =
-        job.use_agent && this.agent
+      if (turnContext?.needsFreshContext) priorDependencies = [];
+      const result: SearchResult = turnContext?.needsFreshContext
+        ? {
+            status: "success",
+            items: [],
+            gaps: [],
+            ...(turnContext.mode === "explicit"
+              ? {
+                  answer: "請先重設對話，再 @小哈 貼上要延續的關鍵一句。",
+                  turn: {
+                    kind: "clarification" as const,
+                    followUp: "awaiting" as const,
+                    answersPending: false,
+                  },
+                }
+              : {
+                  turn: {
+                    kind: "silent" as const,
+                    followUp: "closed" as const,
+                    answersPending: false,
+                  },
+                }),
+          }
+        : job.use_agent && this.agent
           ? await this.agent.query(
               job.id,
               session.group_id,
@@ -657,6 +762,7 @@ export class Conversations {
               job.excluded_source_id ?? undefined,
               previous,
               history,
+              turnContext,
             )
           : await this.search.query(
               session.group_id,
@@ -664,6 +770,22 @@ export class Conversations {
               input,
               job.excluded_source_id ?? undefined,
             );
+      if (turnContext && result.turn) {
+        if (result.turn.answersPending) {
+          const current = turnContext.pendingTurns ?? [];
+          const target =
+            result.turn.answeredPending ??
+            (current.length === 1 ? current[0] : undefined);
+          if (
+            !target ||
+            !current.some(
+              (p) => p.id === target.id && p.version === target.version,
+            )
+          )
+            throw Error("agent_invalid_pending");
+          result.turn.answeredPending = target;
+        } else delete result.turn.answeredPending;
+      }
       await this.store.transaction(async (c) => {
         const group = (
           await c.query("SELECT state FROM groups WHERE id=$1 FOR SHARE", [
@@ -680,7 +802,10 @@ export class Conversations {
             ].map((item) => [item.id, item]),
           ).values(),
         ];
-        if (dependencies.length > 50) throw new Error("agent_evidence_limit");
+        if (
+          dependencies.length > (turnContext ? MAX_PUBLIC_DEPENDENCIES - 1 : 50)
+        )
+          throw new Error("agent_evidence_limit");
         const candidates = (
           await c.query(
             "SELECT id,revision,description_revision,state,expires_at FROM sources WHERE id=ANY($1::uuid[]) ORDER BY id FOR SHARE",
@@ -761,17 +886,18 @@ export class Conversations {
           Buffer.byteLength(JSON.stringify(nextContext)) > 24576
         )
           nextContext.history.shift();
-        await c.query(
-          "UPDATE conversations SET checkpoint_ciphertext=$2,checkpoint_sources=$3 WHERE id=$1",
-          [
-            session.id,
-            this.store.cipher.sealPayload(
-              JSON.stringify(nextContext),
-              `checkpoint:${session.id}:${session.generation}`,
-            ),
-            ids,
-          ],
-        );
+        if (!job.turn_request)
+          await c.query(
+            "UPDATE conversations SET checkpoint_ciphertext=$2,checkpoint_sources=$3 WHERE id=$1",
+            [
+              session.id,
+              this.store.cipher.sealPayload(
+                JSON.stringify(nextContext),
+                `checkpoint:${session.id}:${session.generation}`,
+              ),
+              ids,
+            ],
+          );
         await c.query(
           "UPDATE search_jobs SET state='ready',request_ciphertext=NULL,result_ciphertext=$2,source_ids=$3,expires_at=$4,lease_until=NULL WHERE id=$1",
           [
@@ -785,7 +911,17 @@ export class Conversations {
           ],
         );
       });
-    } catch {
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        ["turns_disabled", "turn_gone"].includes(error.message)
+      ) {
+        await this.store.pool.query(
+          "UPDATE search_jobs SET state='cancelled',request_ciphertext=NULL,result_ciphertext=NULL,lease_until=NULL WHERE id=$1 AND fence=$2 AND state='running'",
+          [job.id, job.fence],
+        );
+        return true;
+      }
       await this.store.pool.query(
         "UPDATE search_jobs SET state=CASE WHEN attempts>=3 THEN 'failed' ELSE 'queued' END,request_ciphertext=CASE WHEN attempts>=3 THEN NULL ELSE request_ciphertext END,lease_until=NULL WHERE id=$1 AND fence=$2 AND state='running'",
         [job.id, job.fence],

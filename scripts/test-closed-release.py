@@ -14,6 +14,16 @@ SECRETS = {k: 'https://alive-vault.vault.azure.net/secrets/hhc-line-harness-' + 
 ROOT = '/subscriptions/3765a72c-2c30-492c-8b88-7a26522903f8/resourceGroups/hhc-line-harness/providers/Microsoft.App/'
 
 class ReleaseTest(unittest.TestCase):
+    def test_group_turn_allowlist_is_api_only_and_can_be_disabled(self):
+        secrets = {k: 'https://alive-vault.vault.azure.net/secrets/hhc-line-harness-' + k + '/' + 'b'*32 for k in ['api-database-url','channel-secret','api-line-token','reply-key','source-gate-token','account-token','gateway-token','audit-token','openai-key','openai-proxy','worker-database-url','download-token']}
+        settings = {'LINE_CHANNEL_ID':'U'+'a'*32,'LINE_BOT_ID':'U'+'a'*32,'LINE_LOGIN_CHANNEL_ID':'1234567891','HARNESS_RUNTIME_GENERATION':'3','GROUP_TURNS_GROUP_IDS':'11111111-1111-4111-8111-111111111111'}
+        env = lambda r: {e['name']: e.get('value') for e in r['resources'][0]['properties']['template']['containers'][0]['env']}
+        self.assertEqual(env(release.render('api', IMAGE, secrets, settings))['GROUP_TURNS_GROUP_IDS'], settings['GROUP_TURNS_GROUP_IDS'])
+        self.assertNotIn('GROUP_TURNS_GROUP_IDS', env(release.render('worker', IMAGE, secrets, settings)))
+        self.assertEqual(env(release.render('api', IMAGE, secrets, dict(settings,GROUP_TURNS_GROUP_IDS='')))['GROUP_TURNS_GROUP_IDS'],'')
+        for value in ['*','bad',settings['GROUP_TURNS_GROUP_IDS']+','+settings['GROUP_TURNS_GROUP_IDS']]:
+            with self.assertRaises(ValueError): release.render('api',IMAGE,secrets,dict(settings,GROUP_TURNS_GROUP_IDS=value))
+
     def test_liff_settings_are_bound_to_existing_login_channel_and_api_only(self):
         secrets = {k: 'https://alive-vault.vault.azure.net/secrets/hhc-line-harness-' + k + '/' + 'b'*32 for k in ['api-database-url','channel-secret','api-line-token','reply-key','source-gate-token','account-token','gateway-token','audit-token','openai-key','openai-proxy','worker-database-url','download-token']}
         settings = {'LINE_CHANNEL_ID':'U'+'a'*32,'LINE_BOT_ID':'U'+'a'*32,'LINE_LOGIN_CHANNEL_ID':'1234567891','HARNESS_RUNTIME_GENERATION':'3','LINE_LIFF_ID':'1234567891-AbCd1234'}

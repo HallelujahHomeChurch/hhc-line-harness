@@ -20,6 +20,10 @@ export async function invalidate(
     )
   ).rows[0];
   if (!source) return;
+  await c.query(
+    "UPDATE group_turns SET question_ciphertext=NULL,answer_ciphertext=NULL,follow_up='closed',version=version+1 WHERE $1::uuid=ANY(source_ids)",
+    [id],
+  );
   // Keep source revocation independent of management and Reply generations.
   await c.query(
     "UPDATE groups SET revocation_revision=revocation_revision+1 WHERE id=$1",
@@ -107,6 +111,10 @@ export async function applyLifecycle(
       ],
     );
     if (group) {
+      await c.query(
+        "UPDATE group_turns SET question_ciphertext=NULL,answer_ciphertext=NULL,follow_up='closed',version=version+1 WHERE group_id=$1 AND $2=ANY(line_message_ids)",
+        [group.id, event.unsentMessageId],
+      );
       const source = (
         await c.query(
           "SELECT id FROM sources WHERE group_id=$1 AND message_id=$2",

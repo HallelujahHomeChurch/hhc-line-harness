@@ -1,4 +1,7 @@
 import { ServiceClient } from "./http.ts";
+export interface ReplyReceipt {
+  messageIds: string[];
+}
 export type ReplyAction =
   | { label: string; data: string; uri?: never }
   | { label: string; uri: string; data?: never };
@@ -17,7 +20,8 @@ export class LineClient {
     token: string,
     text: string,
     actions?: ReplyAction[],
-  ): Promise<void> {
+    options?: { quoteToken?: string },
+  ): Promise<ReplyReceipt> {
     if (
       !token ||
       token.length > 512 ||
@@ -39,12 +43,13 @@ export class LineClient {
           )))
     )
       throw new Error("invalid_reply");
-    await this.http.json("/v2/bot/message/reply", "POST", {
+    const response = await this.http.json("/v2/bot/message/reply", "POST", {
       replyToken: token,
       messages: [
         {
           type: "text",
           text,
+          ...(options?.quoteToken ? { quoteToken: options.quoteToken } : {}),
           ...(actions?.length
             ? {
                 quickReply: {
@@ -61,6 +66,17 @@ export class LineClient {
         },
       ],
     });
+    const ids = Array.isArray(response.sentMessages)
+      ? response.sentMessages.map((m: { id?: unknown }) => m.id)
+      : [];
+    return {
+      messageIds: ids.every(
+        (id: unknown) =>
+          typeof id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(id),
+      )
+        ? (ids as string[])
+        : [],
+    };
   }
   async groupName(group: string): Promise<string> {
     if (!/^C[0-9a-f]{32}$/.test(group)) throw Error("invalid_line_identity");

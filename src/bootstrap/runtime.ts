@@ -1,3 +1,4 @@
+import { GroupTurns } from "../domain/group-turns.ts";
 import type { AssetCredential } from "../providers/asset-auth.ts";
 import { AuditClient, AuditDispatcher } from "../audit/outbox.ts";
 import { EmbeddingIndex } from "../search/embeddings.ts";
@@ -27,6 +28,7 @@ import { AssetClient } from "../providers/asset.ts";
 import { LineClient } from "../providers/line.ts";
 import type { LineEvent } from "../domain/events.ts";
 export interface RuntimeConfig {
+  groupTurnsGroups?: string[];
   runtimeGeneration?: string;
   audit?: { origin: string; token: string };
   agent?: AgentConfig;
@@ -77,7 +79,9 @@ export function createRuntime(
     authority: (id) => account.authority(id),
     member: (group, id) => line.member(group, id),
     collection: (id) => asset.collection(id),
-    send: (token, text) => line.reply(token, text),
+    send: async (token, text) => {
+      await line.reply(token, text);
+    },
   });
   const management = new Management(store, registration, {
     authority: (id) => account.subjectAuthority(id),
@@ -105,7 +109,12 @@ export function createRuntime(
   const agent = models
     ? new HarnessAgent(store, search, sourceEdits, models, embeddings)
     : undefined;
-  const conversations = new Conversations(store, search, agent);
+  const conversations = new Conversations(
+    store,
+    search,
+    agent,
+    new GroupTurns(store, search, config.groupTurnsGroups),
+  );
   const adminQueries = agent
     ? new AdminQueries(store, management, agent)
     : undefined;
@@ -113,12 +122,14 @@ export function createRuntime(
     management,
     adminQueries,
     conversations,
+    groupTurns: conversations.groupTurns,
     sourceEdits,
     liffId: config.liffId,
     binding: async (id) => account.binding(id, await line.linkToken(id)),
     finalize: (id, nonce, result, eventId) =>
       account.finalize(id, nonce, result, eventId),
-    send: (token, text, actions) => line.reply(token, text, actions),
+    send: (token, text, actions, options) =>
+      line.reply(token, text, actions, options),
     adminOrigin: config.adminOrigin,
   });
   const sourceAccess = new SourceAccess(store);

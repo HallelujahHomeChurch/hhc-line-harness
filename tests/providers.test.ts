@@ -408,3 +408,19 @@ test("Account subject authority preserves optional linked actor and rejects malf
     /dependency_unavailable/,
   );
 });
+test("LINE reply retains only validated sent IDs and sends the incoming quote token", async () => {
+  let sent: any;
+  const client = new LineClient("fixture", async (_url, init) => {
+    sent = JSON.parse(String(init?.body));
+    return Response.json({
+      sentMessages: [{ id: "123456", quoteToken: "do-not-store" }],
+    });
+  });
+  assert.deepEqual(
+    await client.reply("reply", "answer", undefined, {
+      quoteToken: "incoming-quote",
+    }),
+    { messageIds: ["123456"] },
+  );
+  assert.equal(sent.messages[0].quoteToken, "incoming-quote");
+});
