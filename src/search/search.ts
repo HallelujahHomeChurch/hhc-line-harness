@@ -45,6 +45,7 @@ export interface ConversationTurn {
   assistant: string;
 }
 export interface SearchResult {
+  webSources?: string[];
   turn?: {
     kind: "answer" | "clarification" | "silent";
     followUp: "continue" | "awaiting" | "closed";

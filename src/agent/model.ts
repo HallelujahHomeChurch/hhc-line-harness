@@ -15,7 +15,13 @@ import {
   type Price,
   type TokenUsage,
 } from "./budgets.ts";
+import type { Lookup, WebResponse } from "./public-web.ts";
+import type OpenAI from "openai";
 export interface ProviderModel {
+  lookup?: (
+    lookup: Lookup,
+    signal: AbortSignal,
+  ) => Promise<WebResponse & Pick<OpenAI.Responses.Response, "usage">>;
   model: Model;
   name: string;
   price: Price;
@@ -84,7 +90,9 @@ export function portable(input: AgentInputItem[]): AgentInputItem[] {
       throw new Error("unsupported_model_content");
     });
 }
-function usage(raw: Record<string, unknown> | undefined): TokenUsage {
+export function modelUsage(
+  raw: Record<string, unknown> | undefined,
+): TokenUsage {
   const details = raw?.input_tokens_details as
     Record<string, unknown> | undefined;
   const input = raw?.input_tokens,
@@ -236,7 +244,7 @@ export class BudgetModel implements Model {
           ...(request.signal ? [request.signal] : []),
         ]);
         const response = await selected.model.getResponse({ ...safe, signal });
-        const tokens = usage(response.rawUsage);
+        const tokens = modelUsage(response.rawUsage);
         await this.budgets.settle(id, tokens);
         const output = portable(response.output).map((o) =>
           o.type === "function_call"

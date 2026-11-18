@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 import type { Store } from "../persistence/store.ts";
 export type Provider = "openai" | "azure";
 export interface Price {
+  webCallMicros?: number;
   inputMicrosPerMillion: number;
   outputMicrosPerMillion: number;
   cachedInputMicrosPerMillion?: number;
@@ -9,6 +10,7 @@ export interface Price {
   cacheWriteLongMicrosPerMillion?: number;
 }
 export interface TokenUsage {
+  webCalls?: number;
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens?: number;
@@ -190,19 +192,26 @@ export class Budgets {
       input.model.length > 128
     )
       throw new Error("invalid_usage");
+    integer(input.price.webCallMicros ?? 0);
     const reserve =
-      (cost(input.inputTokens, input.maxOutputTokens, {
-        ...input.price,
-        inputMicrosPerMillion: Math.max(
-          input.price.inputMicrosPerMillion,
-          input.price.cacheWriteMicrosPerMillion ?? 0,
-          input.price.cacheWriteLongMicrosPerMillion ?? 0,
-          input.price.cachedInputMicrosPerMillion ?? 0,
-        ),
-      }) *
+      2n * BigInt(input.price.webCallMicros ?? 0) +
+      // Hosted retrieval may meter input from each of two 128k web tool contexts plus the final response.
+      (cost(
+        input.price.webCallMicros ? 3 * 131072 : input.inputTokens,
+        input.maxOutputTokens,
+        {
+          ...input.price,
+          inputMicrosPerMillion: Math.max(
+            input.price.inputMicrosPerMillion,
+            input.price.cacheWriteMicrosPerMillion ?? 0,
+            input.price.cacheWriteLongMicrosPerMillion ?? 0,
+            input.price.cachedInputMicrosPerMillion ?? 0,
+          ),
+        },
+      ) *
         120n +
         99n) /
-      100n;
+        100n;
     return this.store.transaction(async (c) => {
       const run = await this.guard(c, input.runId);
       if (
@@ -298,16 +307,21 @@ export class Budgets {
         await c.query("SELECT * FROM model_calls WHERE id=$1 FOR UPDATE", [id])
       ).rows[0];
       if (call.settlement_fenced) throw new Error("restored_model_call");
-      const actual = cost(
-        usage.inputTokens,
-        usage.outputTokens,
-        call.price as Price,
-        usage.cachedInputTokens ?? 0,
-        usage.cacheWriteTokens ?? 0,
-        usage.cacheWriteLongTokens ?? 0,
-      );
+      integer(usage.webCalls ?? 0);
+      const actual =
+        BigInt(usage.webCalls ?? 0) *
+          BigInt((call.price as Price).webCallMicros ?? 0) +
+        cost(
+          usage.inputTokens,
+          usage.outputTokens,
+          call.price as Price,
+          usage.cachedInputTokens ?? 0,
+          usage.cacheWriteTokens ?? 0,
+          usage.cacheWriteLongTokens ?? 0,
+        );
       if (call.state === "settled") {
         if (
+          BigInt(call.actual_micros) !== actual ||
           call.input_tokens !== usage.inputTokens ||
           call.output_tokens !== usage.outputTokens ||
           call.cached_input_tokens !== (usage.cachedInputTokens ?? 0) ||

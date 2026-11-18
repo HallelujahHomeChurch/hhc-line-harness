@@ -9,6 +9,6 @@
 - Asset owns original bytes. No-processing is not no-scan. Never label unscanned uploads clean/scanned, relax another profile or impersonate the legacy caller.
 - Source lifetime is 90 days from publication, with immediate read denial on expiry/revocation. Same message may share one original with Presenter; no cross-message binary deduplication.
 - Preserve current Presenter polling, stable collection/item identities and separate content/control authorization. Website roles, workload identity and LINE membership never substitute for one another.
-- No Push, OCR, transcription, URL fetching, generic workflow engine or credential proxy. No raw payload, token, filename or user content in diagnostics.
+- No Push, OCR, transcription, application-side URL fetching, generic workflow engine or credential proxy. Public group questions may use provider-hosted web search and page reading with only a current-turn public topic or URL. No raw payload, token, filename or user content in diagnostics.
 - Add critical boundary tests before implementation. Use pnpm test, pnpm typecheck, pnpm format:check and pnpm build. Report skipped integration/CI/live acceptance explicitly.
 - Keep all five source plan copies byte-identical; corrections and implementation evidence go in separate files. Original plan SHA-256: 1fe4acb8d94f2a6571577d03ff77edb1e966affc1eb61e5bcd565474af47267b.
