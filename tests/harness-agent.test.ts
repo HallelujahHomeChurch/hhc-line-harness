@@ -1088,3 +1088,126 @@ test(
     assert.equal(calls, 2);
   },
 );
+
+test(
+  "public web reply uses only current-turn public input, verified citations and metered provider calls",
+  { skip: !databaseEnabled },
+  async (t) => {
+    const page = "https://www.alive.org.tw/zh-Hant/about";
+    const context = {
+      mode: "explicit" as const,
+      actor: "member_a",
+      messages: [],
+      history: [
+        { user: "private archive text", assistant: "private response" },
+      ],
+      quoteMissing: false,
+      dependencies: [],
+    };
+    const f = await fixture(t, async () =>
+      reply([
+        {
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [
+            {
+              type: "output_text",
+              text: JSON.stringify({
+                answer: {
+                  publicQuestion: "",
+                  language: "zh-Hant",
+                  focus: "overview",
+                },
+                selected: [],
+                proposal: null,
+                kind: "answer",
+                followUp: "continue",
+                answersPending: false,
+              }),
+            },
+          ],
+        },
+      ]),
+    );
+    let lookups = 0;
+    f.agent.providers.openai.lookup = async (lookup) => {
+      lookups++;
+      assert.deepEqual(lookup, {
+        url: page,
+        language: "zh-Hant",
+        focus: "overview",
+      });
+      return {
+        status: "completed",
+        usage: {
+          input_tokens: 10,
+          output_tokens: 5,
+          total_tokens: 15,
+          input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+          output_tokens_details: { reasoning_tokens: 0 },
+        },
+        output: [
+          {
+            id: "web",
+            type: "web_search_call",
+            status: "completed",
+            action: { type: "open_page", url: page },
+          },
+          {
+            id: "msg",
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [
+              {
+                type: "output_text",
+                text: "教會簡介。",
+                annotations: [
+                  {
+                    type: "url_citation",
+                    url:
+                      lookups === 1 ? page : "https://www.alive.org.tw/other",
+                    title: "官網",
+                    start_index: 0,
+                    end_index: 5,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+    };
+    const query = async (msg: string) =>
+      f.agent.query(
+        randomUUID(),
+        f.group,
+        actor,
+        { query: msg },
+        async () => {},
+        undefined,
+        undefined,
+        [],
+        context,
+      );
+    assert.equal((await query(page)).answer, "教會簡介。\n\n來源\n" + page);
+    assert.equal(
+      (await query(page)).answer,
+      "這次沒能從公開來源核實內容，請稍後再試。",
+    );
+    const denied = await query("https://meet.google.com/abc-test-abc");
+    assert.equal(denied.turn?.kind, "clarification");
+    assert.equal(denied.turn?.followUp, "awaiting");
+    assert.equal(lookups, 2);
+    assert.equal(f.queries(), 0);
+    assert.equal(
+      (
+        await f.pool.query(
+          "SELECT count(*)::int AS n FROM model_calls WHERE actual_micros=10035 AND state='settled'",
+        )
+      ).rows[0].n,
+      2,
+    );
+  },
+);

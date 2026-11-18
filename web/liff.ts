@@ -201,6 +201,20 @@ function render(result: SearchResult) {
         : result.status === "unavailable"
           ? "文字搜尋暫時無法完成，請稍後重試。"
           : "部分資料仍在整理，請稍後再查。");
+  const sourceBlock = result.answer?.match(
+    /\n\n來源\n((?:https?:\/\/[^\s<>]+(?:\n|$)){1,3})$/u,
+  );
+  if (sourceBlock && result.answer) {
+    status.textContent = result.answer.slice(0, sourceBlock.index) + "\n\n來源";
+    for (const href of sourceBlock[1]!.trim().split("\n")) {
+      const link = document.createElement("a");
+      link.href = href;
+      link.textContent = href;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      status.append(document.createElement("br"), link);
+    }
+  }
   for (const item of result.items) {
     const article = document.createElement("article"),
       title = document.createElement("h2"),

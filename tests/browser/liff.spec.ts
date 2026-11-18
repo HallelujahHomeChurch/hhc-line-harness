@@ -41,7 +41,10 @@ const app = createServer({
           result: {
             status: "success",
             ...(conversational
-              ? { answer: "<script>不是程式碼</script>這是完整回答。" }
+              ? {
+                  answer:
+                    "<script>不是程式碼</script>這是完整回答。\n\n來源\nhttps://www.alive.org.tw/",
+                }
               : {}),
             ...(proposal
               ? { proposal: { sourceId: source, kind: "delete" as const } }
@@ -110,8 +113,12 @@ test("saved conversational answers render as text in the optional resource page"
   await page.goto(
     `${origin}/api/line/harness/app?group=${group}&result=${job}`,
   );
-  await expect(page.getByRole("status")).toHaveText(
+  await expect(page.getByRole("status")).toContainText(
     "<script>不是程式碼</script>這是完整回答。",
+  );
+  await expect(page.locator("#status a")).toHaveAttribute(
+    "href",
+    "https://www.alive.org.tw/",
   );
   await expect(page.locator("#status script")).toHaveCount(0);
 });

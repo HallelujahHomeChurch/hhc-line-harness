@@ -1,3 +1,4 @@
+import { hostedLookup } from "./public-web.ts";
 import OpenAI from "openai";
 import { OpenAIResponsesModel, setTracingDisabled } from "@openai/agents";
 import {
@@ -113,6 +114,8 @@ export function createModelProviders(
   return {
     close: transport.close,
     openai: {
+      lookup: (lookup, signal) =>
+        hostedLookup(primary, config.openaiModel, lookup, signal),
       model: new OpenAIResponsesModel(primary, config.openaiModel),
       name: config.openaiModel,
       price: config.openaiPrice,
