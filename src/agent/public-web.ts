@@ -65,7 +65,10 @@ export function publicLookup(
   selected: string,
 ): Lookup | undefined {
   const links = current.match(linkPattern) ?? [];
-  const prose = current.replace(linkPattern, "").trim();
+  const prose = current
+    .replace(/^\s*@小哈(?:\s+|[，,:：]\s*)/u, "")
+    .replace(linkPattern, "")
+    .trim();
   const sensitive =
     /[\r\n;；：:，,。].{2}|我(?:的|家|媽|爸|朋友|同事)|我們群|家人|病歷|病況|門禁|password|my (?:family|friend|address|password)|our group|private|@|(?:https?:|www\.)/iu.test(
       prose,

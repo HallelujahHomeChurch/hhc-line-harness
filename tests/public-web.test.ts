@@ -6,6 +6,10 @@ test("only a public topic quoted from the current turn or its explicit URL leave
   assert.deepEqual(publicLookup("介紹哈利路亞家教會", "哈利路亞家教會"), {
     topic: "哈利路亞家教會",
   });
+  assert.deepEqual(
+    publicLookup("@小哈 介紹哈利路亞家教會", "介紹哈利路亞家教會"),
+    { topic: "介紹哈利路亞家教會" },
+  );
   assert.deepEqual(publicLookup("官網：http://www.alive.org.tw/", "歷史訊息"), {
     url: "http://www.alive.org.tw/",
   });
