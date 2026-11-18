@@ -891,6 +891,7 @@ export class HarnessAgent {
         result,
       ).answer;
       let answer: string;
+      let webSources: string[] | undefined;
       if (typeof requested === "string") answer = requested;
       else {
         const lookup = publicLookup(input.query, requested.publicQuestion);
@@ -900,19 +901,22 @@ export class HarnessAgent {
             focus: requested.focus,
             language: requested.language,
           };
-          answer =
-            (await ledger.invoke(
-              "public_web",
-              z.literal("current_turn"),
-              "current_turn",
-              async () =>
-                (await answerFromWeb(
-                  this.budgets,
-                  id,
-                  this.providers.openai,
-                  request,
-                )) ?? null,
-            )) ?? "這次沒能從公開來源核實內容，請稍後再試。";
+          const evidence = await ledger.invoke(
+            "public_web",
+            z.literal("current_turn"),
+            "current_turn",
+            async () =>
+              (await answerFromWeb(
+                this.budgets,
+                id,
+                this.providers.openai,
+                request,
+              )) ?? null,
+          );
+          webSources = evidence?.sources;
+          answer = evidence
+            ? evidence.body + "\n\n來源\n" + evidence.sources.join("\n")
+            : "這次沒能從公開來源核實內容，請稍後再試。";
         } else {
           answer = "可以給我公開的主題名稱或不含私人分享資訊的網頁連結嗎？";
         }
@@ -924,9 +928,8 @@ export class HarnessAgent {
               selected: [],
               proposal: null,
               kind: lookup ? "answer" : "clarification",
-              ...(!lookup
-                ? { followUp: "awaiting", answersPending: false }
-                : {}),
+              followUp: lookup ? "continue" : "awaiting",
+              ...(!lookup ? { answersPending: false } : {}),
             })
           : conversation.parse({ answer, selected: [], proposal: null });
       }
@@ -947,6 +950,7 @@ export class HarnessAgent {
         throw Error("agent_invalid_pending");
       return {
         answer,
+        ...(webSources ? { webSources } : {}),
         ...(groupContext
           ? {
               turn: {

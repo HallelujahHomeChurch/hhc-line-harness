@@ -42,6 +42,7 @@ const app = createServer({
             status: "success",
             ...(conversational
               ? {
+                  webSources: ["https://www.alive.org.tw/"],
                   answer:
                     "<script>不是程式碼</script>這是完整回答。\n\n來源\nhttps://www.alive.org.tw/",
                 }

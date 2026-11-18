@@ -22,7 +22,7 @@ function publicUrl(raw: string): URL | undefined {
       url.port ||
       !/^(?:[a-z0-9-]+\.)+[a-z]{2,63}$/.test(host) ||
       isIP(host) ||
-      /(?:^|\.)(?:local|internal|test|localhost|invalid|lan|home|onion|arpa|meet\.google\.com|zoom\.us|teams\.microsoft\.com|discord\.gg|discord\.com|bit\.ly|tinyurl\.com|t\.co|forms\.gle|aka\.ms|nip\.io|sslip\.io|liff\.line\.me|line\.me|1drv\.ms|onedrive\.live\.com|sharepoint\.com|docs\.google\.com|drive\.google\.com|dropbox\.com|blob\.core\.windows\.net)$/.test(
+      /(?:^|\.)(?:local|internal|test|localhost|invalid|lan|home|onion|arpa|photos\.app\.goo\.gl|photos\.google\.com|drive\.usercontent\.google\.com|icloud\.com|meet\.google\.com|zoom\.us|teams\.microsoft\.com|discord\.gg|discord\.com|bit\.ly|tinyurl\.com|t\.co|forms\.gle|aka\.ms|nip\.io|sslip\.io|liff\.line\.me|line\.me|1drv\.ms|onedrive\.live\.com|sharepoint\.com|docs\.google\.com|drive\.google\.com|dropbox\.com|blob\.core\.windows\.net)$/.test(
         host,
       ) ||
       /(?:^|\.)(?:admin|intranet|assets-api|account|presenter|priv)(?:\.|$)/i.test(
@@ -66,16 +66,22 @@ export function publicLookup(
 ): Lookup | undefined {
   const links = current.match(linkPattern) ?? [];
   const prose = current
-    .replace(/^\s*@小哈(?:\s+|[，,:：]\s*)/u, "")
+    .replace(/^\s*@?小哈(?:\s+|[，,:：]\s*)/u, "")
     .replace(linkPattern, "")
     .trim();
   const sensitive =
-    /[\r\n;；：:，,。].{2}|我(?:的|家|媽|爸|朋友|同事)|我們群|家人|病歷|病況|門禁|password|my (?:family|friend|address|password)|our group|private|@|(?:https?:|www\.)/iu.test(
+    /[\r\n;；：:，,。].{2}|我(?:的|家|媽|爸|朋友|同事)|我們群|家人|病歷|病況|化療|住院|診斷|therapy|diagnos|門禁|password|my (?:family|friend|address|password)|our group|private|@|(?:https?:|www\.)/iu.test(
       prose,
     );
   const topic = sensitive ? undefined : publicTopic(prose, selected);
   if (!links.length) return topic ? { topic } : undefined;
-  if (links.length !== 1) return;
+  if (
+    links.length !== 1 ||
+    /私人|私密|非公開|僅供|請勿外傳|密碼|private|confidential|invite.only/iu.test(
+      prose,
+    )
+  )
+    return;
   const url = publicUrl(links[0]!);
   if (!url) return;
   // The hosted reader can open HTTP-only public sites as well.
@@ -117,7 +123,7 @@ function targetCitation(citation: string, target: string) {
 export function webAnswer(
   response: WebResponse,
   lookup: Lookup,
-): string | undefined {
+): { body: string; sources: string[] } | undefined {
   if (response.status !== "completed") return;
   const actions = response.output.filter(
     (x): x is OpenAI.Responses.ResponseFunctionWebSearch =>
@@ -175,10 +181,10 @@ export function webAnswer(
     .replace(linkPattern, "")
     .trim();
   return body
-    ? (opened ? "" : "依該頁的公開搜尋內容，") +
-        body.slice(0, 1750) +
-        "\n\n來源\n" +
-        sources.slice(0, 3).join("\n")
+    ? {
+        body: (opened ? "" : "依該頁的公開搜尋內容，") + body.slice(0, 1750),
+        sources: sources.slice(0, 3),
+      }
     : undefined;
 }
 export function hostedLookup(

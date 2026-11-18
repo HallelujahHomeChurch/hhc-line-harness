@@ -256,7 +256,7 @@ export class Interactions {
           `SELECT i.*,d.search_result_id FROM interactions i JOIN runtime_state r ON r.mode='open' AND r.generation=i.runtime_generation
     LEFT JOIN deliveries d ON d.id=i.delivery_id LEFT JOIN search_jobs j ON j.id=d.search_result_id
     WHERE i.channel_id=$1 AND i.state='queued'
-    AND (i.kind<>'search' OR d.search_result_id IS NULL OR j.state NOT IN ('queued','running') OR d.received_at <= $2::timestamptz - interval '20 seconds' OR d.expires_at <= $2::timestamptz + interval '5 seconds')
+    AND (i.kind<>'search' OR d.search_result_id IS NULL OR j.state NOT IN ('queued','running') OR (NOT j.use_agent AND d.received_at <= $2::timestamptz - interval '20 seconds') OR d.expires_at <= $2::timestamptz + interval '5 seconds')
     AND NOT EXISTS(SELECT 1 FROM interactions older WHERE older.channel_id=i.channel_id AND older.scope_id=i.scope_id AND older.actor_id=i.actor_id AND older.sequence<i.sequence AND older.state IN ('queued','running')) ORDER BY i.sequence FOR UPDATE OF i SKIP LOCKED LIMIT 1`,
           [this.store.channelId, now],
         )

@@ -1462,3 +1462,30 @@ for (const [text, kind] of [
       );
     },
   );
+
+test(
+  "a 26-second agent lookup still delivers one cited answer directly to the group",
+  { skip: !databaseEnabled },
+  async (t) => {
+    const text = "哈利路亞家教會。\n\n來源\nhttps://www.alive.org.tw/";
+    const f = await fixture(t, async () => ({
+      status: "success",
+      items: [],
+      gaps: [],
+      answer: text,
+      webSources: ["https://www.alive.org.tw/"],
+      turn: { kind: "answer", followUp: "continue" },
+    }));
+    await f.ask("@小哈 介紹哈利路亞家教會");
+    await f.interactions.processOne();
+    f.advance(26_000);
+    assert.equal(await f.interactions.processOne(), false);
+    await f.conversations.processOne();
+    await f.interactions.processOne();
+    assert.deepEqual(
+      f.sent.map((r) => r.text),
+      [text],
+    );
+    assert.ok(!f.sent[0]?.actions?.length);
+  },
+);

@@ -53,3 +53,25 @@ test("private mixed statements and invitation links stay local; URL-only disclos
     { url: "https://www.alive.org.tw/" },
   );
 });
+
+test("direct calls use the public subject, private albums and mixed medical details stay local", () => {
+  assert.deepEqual(
+    publicLookup("小哈，請問哈利路亞家教會在哪裡？", "哈利路亞家教會"),
+    { topic: "哈利路亞家教會" },
+  );
+  assert.equal(
+    publicLookup("私人相簿 https://photos.app.goo.gl/AbCdEfG", ""),
+    undefined,
+  );
+  assert.equal(
+    publicLookup("私人群組 https://example.com/event", ""),
+    undefined,
+  );
+  assert.equal(
+    publicLookup(
+      "介紹哈利路亞家教會 王小明週二化療",
+      "介紹哈利路亞家教會 王小明週二化療",
+    ),
+    undefined,
+  );
+});
