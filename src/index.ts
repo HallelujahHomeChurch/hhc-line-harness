@@ -51,7 +51,11 @@ async function main() {
   });
   const timers: NodeJS.Timeout[] = [];
   const running = new Set<Promise<void>>();
-  const repeat = (interval: number, operation: () => Promise<unknown>) => {
+  const repeat = (
+    name: string,
+    interval: number,
+    operation: () => Promise<unknown>,
+  ) => {
     let busy = false;
     timers.push(
       setInterval(() => {
@@ -61,7 +65,12 @@ async function main() {
           .then(
             () => {},
             () => {
-              process.stderr.write("background_dependency_unavailable\n");
+              process.stderr.write(
+                JSON.stringify({
+                  event: "background_dependency_unavailable",
+                  operation: name,
+                }) + "\n",
+              );
             },
           )
           .finally(() => {
@@ -80,7 +89,7 @@ async function main() {
     );
     const wakes = new WakeDispatcher(runtime.store, (id) => queue.send(id));
     if (runtime.audit)
-      repeat(1000, async () => {
+      repeat("audit", 1000, async () => {
         for (let i = 0; i < 20 && (await runtime.audit!.processOne()); i++);
       });
     const operations = new Operations(runtime.store);
@@ -91,8 +100,8 @@ async function main() {
         ),
       );
     });
-    repeat(30_000, () => alerts.processOne());
-    repeat(60_000, async () => {
+    repeat("budget_alerts", 30_000, () => alerts.processOne());
+    repeat("health", 60_000, async () => {
       process.stdout.write(
         JSON.stringify({
           event: "line_harness_health",
@@ -101,14 +110,14 @@ async function main() {
         }) + "\n",
       );
     });
-    repeat(100, () => runtime.interactions.processOne());
-    repeat(250, () => runtime.conversations.processOne());
+    repeat("interactions", 100, () => runtime.interactions.processOne());
+    repeat("conversations", 250, () => runtime.conversations.processOne());
     if (runtime.adminQueries)
-      repeat(250, () => runtime.adminQueries!.processOne());
-    repeat(1000, async () => {
+      repeat("admin_queries", 250, () => runtime.adminQueries!.processOne());
+    repeat("job_wakes", 1000, async () => {
       for (let i = 0; i < 32 && (await wakes.processOne()); i++);
     });
-    repeat(60_000, async () => {
+    repeat("retention", 60_000, async () => {
       await sweepExpired(runtime.store);
       await new Retention(runtime.store).sweep();
     });

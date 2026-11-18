@@ -1,3 +1,4 @@
+import type { ReplyAction } from "../src/providers/line.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { database, databaseEnabled } from "./database.ts";
@@ -25,12 +26,12 @@ test(
     );
     const sent: {
       text: string;
-      actions?: { label: string; data: string }[];
+      actions?: ReplyAction[];
     }[] = [];
     const send = async (
       _token: string,
       text: string,
-      actions?: { label: string; data: string }[],
+      actions?: ReplyAction[],
     ) => {
       sent.push({ text, actions });
     };
@@ -194,13 +195,9 @@ test(
     });
     const sent: {
       text: string;
-      actions?: { label: string; data: string }[];
+      actions?: ReplyAction[];
     }[] = [];
-    const send = async (
-      _: string,
-      text: string,
-      actions?: { label: string; data: string }[],
-    ) => {
+    const send = async (_: string, text: string, actions?: ReplyAction[]) => {
       sent.push({ text, actions });
     };
     const registration = new Registration(store, {

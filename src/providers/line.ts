@@ -1,8 +1,7 @@
 import { ServiceClient } from "./http.ts";
-export interface ReplyAction {
-  label: string;
-  data: string;
-}
+export type ReplyAction =
+  | { label: string; data: string; uri?: never }
+  | { label: string; uri: string; data?: never };
 export class LineClient {
   readonly http: ServiceClient;
   constructor(token: string, fetcher: typeof fetch = fetch) {
@@ -28,7 +27,15 @@ export class LineClient {
         (actions.length > 13 ||
           actions.some(
             (a) =>
-              !a.label || a.label.length > 20 || !a.data || a.data.length > 300,
+              !a.label ||
+              a.label.length > 20 ||
+              (a.uri !== undefined
+                ? a.data !== undefined ||
+                  a.uri.length > 2048 ||
+                  !/^https:\/\/liff\.line\.me\/[0-9]+-[A-Za-z0-9]+\?group=[0-9a-f-]{36}&result=[0-9a-f-]{36}$/.test(
+                    a.uri,
+                  )
+                : !a.data || a.data.length > 300),
           )))
     )
       throw new Error("invalid_reply");
@@ -43,7 +50,10 @@ export class LineClient {
                 quickReply: {
                   items: actions.map((a) => ({
                     type: "action",
-                    action: { type: "postback", label: a.label, data: a.data },
+                    action:
+                      a.uri !== undefined
+                        ? { type: "uri", label: a.label, uri: a.uri }
+                        : { type: "postback", label: a.label, data: a.data },
                   })),
                 },
               }
