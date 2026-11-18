@@ -1244,3 +1244,221 @@ test(
     assert.equal(f.sent.length, 5);
   },
 );
+
+for (const task of [
+  "介紹範例讀書會",
+  "比較兩種迎新方式",
+  "新人歡迎詞，三句就好",
+])
+  test(
+    `an uninterrupted continue turn admits the non-question task: ${task}`,
+    { skip: !databaseEnabled },
+    async (t) => {
+      let calls = 0;
+      const f = await fixture(t, async (...args) => {
+        calls++;
+        if (calls === 2) assert.equal(args[8]?.mode, "implicit");
+        return {
+          status: "success",
+          items: [],
+          gaps: [],
+          answer:
+            calls === 1 ? "嗨！有什麼我可以幫忙的嗎？" : "這是任務的回答。",
+          turn: { kind: "answer", followUp: "continue" },
+        };
+      });
+      await f.ask("@小哈 hi");
+      await finish(f);
+      await f.ask(task, actor, false);
+      await finish(f);
+      assert.equal(calls, 2);
+      assert.equal(f.sent.length, 2);
+      assert.equal(
+        (
+          await f.pool.query(
+            "SELECT count(*)::int n FROM group_turn_resets WHERE actor_id=$1",
+            [actor],
+          )
+        ).rows[0].n,
+        0,
+      );
+    },
+  );
+
+for (const peer of [actor, `U${"3".repeat(32)}`])
+  test(
+    `peer handover keeps a later non-question task quiet for ${peer === actor ? "same" : "other"} actor`,
+    { skip: !databaseEnabled },
+    async (t) => {
+      let calls = 0;
+      const f = await fixture(t, async (...args) => {
+        calls++;
+        return answer(...args);
+      });
+      await f.ask("@小哈 hi");
+      await finish(f);
+      await f.ask("阿明，車到了，我們先走", peer, false);
+      await finish(f);
+      await f.ask("介紹範例讀書會", actor, false);
+      await finish(f);
+      assert.equal(calls, 1);
+      assert.equal(f.sent.length, 1);
+    },
+  );
+
+test(
+  "late older peer addressing cannot close a newer continue turn",
+  { skip: !databaseEnabled },
+  async (t) => {
+    const f = await fixture(t, answer);
+    f.advance(10000);
+    const older = f.store.now();
+    await f.ask("@小哈 hi");
+    await finish(f);
+    await f.store.ingest(
+      {
+        id: "late-peer",
+        type: "message",
+        scope: "group",
+        scopeId: lineGroup,
+        actorId: actor,
+        publishedAt: older,
+        replyToken: "late-peer-token",
+        message: {
+          id: "late-peer-message",
+          type: "text",
+          text: "阿明，車到了",
+          mentionsBot: false,
+        },
+      },
+      (c, e, g) => f.interactions.record(c, e, g),
+    );
+    assert.equal(
+      (
+        await f.pool.query(
+          "SELECT count(*)::int n FROM sources WHERE message_id='late-peer-message'",
+        )
+      ).rows[0].n,
+      1,
+    );
+    await f.ask("介紹範例讀書會", actor, false);
+    await finish(f);
+    assert.equal(f.sent.length, 2);
+  },
+);
+
+test(
+  "a late task excludes peer handover that happened after its event time",
+  { skip: !databaseEnabled },
+  async (t) => {
+    const f = await fixture(t, answer);
+    await f.ask("@小哈 hi");
+    await finish(f);
+    f.advance(1000);
+    const at = f.store.now();
+    await f.ask("阿明，車到了", `U${"3".repeat(32)}`, false);
+    await finish(f);
+    await f.store.ingest(
+      {
+        id: "late-task",
+        type: "message",
+        scope: "group",
+        scopeId: lineGroup,
+        actorId: actor,
+        publishedAt: at,
+        replyToken: "late-task-token",
+        message: {
+          id: "late-task-message",
+          type: "text",
+          text: "介紹範例讀書會",
+          mentionsBot: false,
+        },
+      },
+      (c, e, g) => f.interactions.record(c, e, g),
+    );
+    await finish(f);
+    assert.equal(f.sent.length, 2);
+  },
+);
+
+for (const [text, kind] of [
+  ["介紹範例讀書會", "answer"],
+  ["車子停在後門了", "silent"],
+] as const)
+  test(
+    `a non-question continuation keeps the SDK tool-free and respects ${kind}`,
+    { skip: !databaseEnabled },
+    async (t) => {
+      const f = await fixture(t, answer);
+      let calls = 0;
+      const model: Model = {
+        async getResponse(request) {
+          calls++;
+          if (calls === 2) assert.equal(request.tools.length, 0);
+          const value = {
+            answer:
+              calls === 1
+                ? "嗨！有什麼我可以幫忙的嗎？"
+                : kind === "answer"
+                  ? "可以先介紹社群的活動。"
+                  : "不需回覆。",
+            selected: [],
+            proposal: null,
+            kind: calls === 1 ? "answer" : kind,
+            followUp: "continue",
+            answersPending: false,
+          };
+          return {
+            output: [
+              {
+                type: "message",
+                role: "assistant",
+                status: "completed",
+                content: [{ type: "output_text", text: JSON.stringify(value) }],
+              },
+            ],
+            usage: new Usage({ inputTokens: 10, outputTokens: 10 }),
+            rawUsage: {
+              input_tokens: 10,
+              output_tokens: 10,
+              input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+            },
+          };
+        },
+        async *getStreamedResponse() {
+          throw Error("unused");
+        },
+      };
+      const provider = {
+        model,
+        name: "synthetic",
+        price: {
+          inputMicrosPerMillion: 1000000,
+          outputMicrosPerMillion: 5000000,
+        },
+      };
+      const agent = new HarnessAgent(
+        f.store,
+        f.conversations.search,
+        new SourceEdits(f.store, f.conversations.search, async () => {
+          throw Error("unused");
+        }),
+        { openai: provider, azure: provider },
+      );
+      f.conversations.agent!.query = agent.query.bind(agent);
+      await f.ask("@小哈 hi");
+      await finish(f);
+      await f.ask(text, actor, false);
+      await finish(f);
+      assert.equal(calls, 2);
+      assert.equal(f.sent.length, kind === "answer" ? 2 : 1);
+      assert.equal(
+        (
+          await f.pool.query(
+            "SELECT count(*)::int n FROM deliveries WHERE state IN ('pending','attempt_reserved')",
+          )
+        ).rows[0].n,
+        0,
+      );
+    },
+  );

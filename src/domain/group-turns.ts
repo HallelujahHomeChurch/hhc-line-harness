@@ -294,10 +294,11 @@ export class GroupTurns {
         [group.id, m.id, last.delivered_at, event.publishedAt],
       )
     ).rowCount;
+    // Uninterrupted same-speaker continuity establishes a candidate regardless
+    // of sentence form; the existing tool-free Agent still decides whether to reply.
     if (
       last.actor_id === event.actorId &&
       last.follow_up === "continue" &&
-      question &&
       !intervening
     )
       return {
