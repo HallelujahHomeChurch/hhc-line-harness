@@ -192,13 +192,15 @@ async function download(id: string, name: string) {
 }
 function render(result: SearchResult) {
   results.replaceChildren();
-  status.textContent = result.items.length
-    ? `找到 ${result.items.length} 筆相關資料${result.status === "ambiguous" ? "，請確認要找的版本" : ""}。`
-    : result.status === "not_found"
-      ? "未找到符合的資料，試試其他關鍵字。"
-      : result.status === "unavailable"
-        ? "文字搜尋暫時無法完成，請稍後重試。"
-        : "部分資料仍在整理，請稍後再查。";
+  status.textContent =
+    result.answer ??
+    (result.items.length
+      ? `找到 ${result.items.length} 筆相關資料${result.status === "ambiguous" ? "，請確認要找的版本" : ""}。`
+      : result.status === "not_found"
+        ? "未找到符合的資料，試試其他關鍵字。"
+        : result.status === "unavailable"
+          ? "文字搜尋暫時無法完成，請稍後重試。"
+          : "部分資料仍在整理，請稍後再查。");
   for (const item of result.items) {
     const article = document.createElement("article"),
       title = document.createElement("h2"),

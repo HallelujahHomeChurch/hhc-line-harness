@@ -31,10 +31,11 @@ test(
       "fixture",
       () => now,
     );
-    const conversations = new Conversations(
-      store,
-      new Search(store, async () => true),
-    );
+    const search = new Search(store, async () => true);
+    const conversations = new Conversations(store, search, {
+      query: async (_id, groupId, user, _input, _valid, excluded) =>
+        search.query(groupId, user, { query: "同工排班" }, excluded),
+    });
     const sent: { text: string; actions?: ReplyAction[] }[] = [];
     const unexpected = async () => {
       throw new Error("unexpected account or admin call");
@@ -80,12 +81,14 @@ test(
     while (await indexer.processOne()) {}
     await ingest("query", "@Bot 查詢 同工排班", true);
     assert.equal(await interactions.processOne(), true);
-    assert.equal(sent.length, 1);
-    assert.match(sent[0]!.text, /不會另行推播/);
-    assert.match(sent[0]!.text, /liff.line.me/);
+    assert.equal(sent.length, 0);
     assert.equal(await conversations.processOne(), true);
+    await interactions.processOne();
     assert.equal(sent.length, 1);
-    const data = sent[0]!.actions![0]!.data;
+    assert.match(sent[0]!.text, /十二月同工排班已公告/);
+    assert.doesNotMatch(sent[0]!.text, /https?:/);
+    assert.match(sent[0]!.actions![0]!.uri!, /^https:\/\/liff.line.me\//);
+    const data = `search:get:${(await pool.query("SELECT id FROM search_jobs")).rows[0].id}`;
     const pickup: LineEvent = {
       id: "pickup",
       scope: "group",

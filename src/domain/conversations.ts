@@ -3,12 +3,41 @@ import type { HarnessAgent } from "../agent/agent.ts";
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import type { Store, InteractionFence } from "../persistence/store.ts";
-import type { Search, SearchInput, SearchResult } from "../search/search.ts";
+import type {
+  Search,
+  SearchInput,
+  SearchResult,
+  ConversationTurn,
+} from "../search/search.ts";
 const IDLE = 30 * 60_000;
 const resourceContext = z
   .object({
     kind: z.literal("resource_context_v1"),
     sourceIds: z.array(z.string().uuid()).max(5),
+  })
+  .strict();
+const chatContext = z
+  .object({
+    kind: z.literal("chat_context_v1"),
+    sourceIds: z.array(z.string().uuid()).max(5),
+    dependencies: z
+      .array(
+        z.object({
+          id: z.string().uuid(),
+          revision: z.string(),
+          descriptionRevision: z.string(),
+          expiresAt: z.string(),
+        }),
+      )
+      .max(50),
+    history: z
+      .array(
+        z.object({
+          user: z.string().max(4000),
+          assistant: z.string().max(4000),
+        }),
+      )
+      .max(6),
   })
   .strict();
 interface Session {
@@ -146,7 +175,16 @@ export class Conversations {
     excludedSourceId?: string,
     useAgent = false,
   ) {
-    this.search.validate(input);
+    if (useAgent) {
+      if (!this.agent) throw new Error("search_unavailable");
+      if (
+        typeof input.query !== "string" ||
+        !input.query.trim() ||
+        input.query.length > 4000 ||
+        Object.keys(input).some((key) => key !== "query")
+      )
+        throw new Error("invalid_search");
+    } else this.search.validate(input);
     const scope = await this.search.scope(groupId, actor);
     return this.store.transaction(async (c) => {
       const session = await this.session(
@@ -196,6 +234,16 @@ export class Conversations {
           useAgent && Boolean(this.agent),
         ],
       );
+      if (fence) {
+        await c.query(
+          "UPDATE deliveries SET search_result_id=$2 WHERE id=(SELECT delivery_id FROM interactions WHERE id=$1)",
+          [fence.id, id],
+        );
+        await c.query(
+          "UPDATE interactions SET state='queued',lease_until=NULL WHERE id=$1 AND fence=$2 AND state='running'",
+          [fence.id, fence.fence],
+        );
+      }
       return { id, generation: session.generation };
     });
   }
@@ -453,7 +501,7 @@ export class Conversations {
       )
         return;
       const live = await c.query(
-        "SELECT id FROM sources WHERE id=ANY($1::uuid[]) AND group_id=$2 AND state NOT IN ('revoked','expired','failed') AND expires_at>$3 ORDER BY id FOR SHARE",
+        "SELECT id,revision,description_revision FROM sources WHERE id=ANY($1::uuid[]) AND group_id=$2 AND state NOT IN ('revoked','expired','failed') AND expires_at>$3 ORDER BY id FOR SHARE",
         [session.checkpoint_sources, groupId, this.store.now()],
       );
       const current = (
@@ -470,14 +518,29 @@ export class Conversations {
         current.checkpoint_ciphertext !== session.checkpoint_ciphertext
       )
         return;
+      const value = JSON.parse(
+        this.store.cipher.openPayload(
+          session.checkpoint_ciphertext,
+          `checkpoint:${session.id}:${session.generation}`,
+        ),
+      ) as unknown;
+      const context = chatContext.safeParse(value);
+      if (
+        context.success &&
+        context.data.dependencies.some(
+          (dependency) =>
+            !live.rows.some(
+              (source) =>
+                source.id === dependency.id &&
+                source.revision === dependency.revision &&
+                source.description_revision === dependency.descriptionRevision,
+            ),
+        )
+      )
+        return;
       return {
         generation: session.generation,
-        value: JSON.parse(
-          this.store.cipher.openPayload(
-            session.checkpoint_ciphertext,
-            `checkpoint:${session.id}:${session.generation}`,
-          ),
-        ) as unknown,
+        value,
       };
     });
   }
@@ -540,13 +603,26 @@ export class Conversations {
           await this.valid(c, current);
         });
       let previous: SearchResult | undefined;
+      let history: ConversationTurn[] = [];
+      let priorDependencies: NonNullable<SearchResult["dependencies"]> = [];
       if (job.use_agent && this.agent) {
         const checkpoint = await this.checkpoint(
           session.group_id,
           session.actor_id,
         );
-        const context = resourceContext.safeParse(checkpoint?.value);
-        if (context.success && context.data.sourceIds.length) {
+        const context = z
+          .union([chatContext, resourceContext])
+          .safeParse(checkpoint?.value);
+        // Leave room for this turn's evidence instead of accumulating an unbounded history.
+        const usable =
+          context.success &&
+          (context.data.kind === "resource_context_v1" ||
+            context.data.dependencies.length < 25);
+        if (usable && context.data.kind === "chat_context_v1") {
+          history = context.data.history;
+          priorDependencies = context.data.dependencies;
+        }
+        if (usable && context.data.sourceIds.length) {
           const candidates = await this.search.query(
             session.group_id,
             session.actor_id,
@@ -556,11 +632,19 @@ export class Conversations {
           );
           previous = {
             ...candidates,
+            dependencies: priorDependencies,
             items: candidates.items.filter((i) =>
               context.data.sourceIds.includes(i.id),
             ),
           };
         }
+        if (!previous && priorDependencies.length)
+          previous = {
+            status: "success",
+            items: [],
+            gaps: [],
+            dependencies: priorDependencies,
+          };
       }
       const result =
         job.use_agent && this.agent
@@ -572,6 +656,7 @@ export class Conversations {
               valid,
               job.excluded_source_id ?? undefined,
               previous,
+              history,
             )
           : await this.search.query(
               session.group_id,
@@ -586,19 +671,29 @@ export class Conversations {
           ])
         ).rows[0];
         if (group.state !== "active") throw new Error("search_paused");
+        const dependencies = [
+          ...new Map(
+            [
+              ...priorDependencies,
+              ...(result.dependencies ?? []),
+              ...result.items,
+            ].map((item) => [item.id, item]),
+          ).values(),
+        ];
+        if (dependencies.length > 50) throw new Error("agent_evidence_limit");
         const candidates = (
           await c.query(
             "SELECT id,revision,description_revision,state,expires_at FROM sources WHERE id=ANY($1::uuid[]) ORDER BY id FOR SHARE",
-            [result.items.map((i) => i.id)],
+            [dependencies.map((i) => i.id)],
           )
         ).rows;
         if (
-          candidates.length !== result.items.length ||
+          candidates.length !== dependencies.length ||
           candidates.some(
             (s) =>
               ["revoked", "expired", "failed"].includes(s.state) ||
               s.expires_at <= this.store.now() ||
-              !result.items.some(
+              !dependencies.some(
                 (i) =>
                   i.id === s.id &&
                   i.revision === s.revision &&
@@ -628,21 +723,50 @@ export class Conversations {
         const ids = [
           ...new Set([
             ...(job.excluded_source_id ? [job.excluded_source_id] : []),
+            ...dependencies.map((i) => i.id),
             ...result.items.flatMap((i) => [
               i.id,
               ...i.versions.flatMap((v) => [v.id, v.evidenceSourceId]),
             ]),
           ]),
         ];
+        const nextHistory =
+          result.answer && result.status !== "unavailable"
+            ? [
+                ...history,
+                { user: input.query, assistant: result.answer },
+              ].slice(-6)
+            : history;
+        const nextContext = job.use_agent
+          ? {
+              kind: "chat_context_v1",
+              sourceIds: result.items.map((i) => i.id),
+              dependencies: dependencies.map(
+                ({ id, revision, descriptionRevision, expiresAt }) => ({
+                  id,
+                  revision,
+                  descriptionRevision,
+                  expiresAt,
+                }),
+              ),
+              history: nextHistory,
+            }
+          : {
+              kind: "resource_context_v1",
+              sourceIds: result.items.map((i) => i.id),
+            };
+        while (
+          nextContext.history &&
+          nextContext.history.length &&
+          Buffer.byteLength(JSON.stringify(nextContext)) > 24576
+        )
+          nextContext.history.shift();
         await c.query(
           "UPDATE conversations SET checkpoint_ciphertext=$2,checkpoint_sources=$3 WHERE id=$1",
           [
             session.id,
             this.store.cipher.sealPayload(
-              JSON.stringify({
-                kind: "resource_context_v1",
-                sourceIds: result.items.map((i) => i.id),
-              }),
+              JSON.stringify(nextContext),
               `checkpoint:${session.id}:${session.generation}`,
             ),
             ids,

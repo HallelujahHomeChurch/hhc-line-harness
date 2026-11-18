@@ -3,6 +3,35 @@ import { test } from "node:test";
 import { ServiceClient } from "../src/providers/http.ts";
 import { LineClient } from "../src/providers/line.ts";
 import { AccountClient } from "../src/providers/account.ts";
+test("LINE resource actions open the protected page without putting its URL in reply text", async () => {
+  let body:
+    | {
+        messages: {
+          text: string;
+          quickReply: { items: { action: unknown }[] };
+        }[];
+      }
+    | undefined;
+  const client = new LineClient("fixture", async (_url, init) => {
+    body = JSON.parse(String(init?.body));
+    return Response.json({});
+  });
+  const uri =
+    "https://liff.line.me/123456-test?group=11111111-1111-4111-8111-111111111111&result=22222222-2222-4222-8222-222222222222";
+  await client.reply("token", "找到這份資料。", [{ label: "查看資料", uri }]);
+  assert.equal(body!.messages[0]!.text, "找到這份資料。");
+  assert.deepEqual(body!.messages[0]!.quickReply.items[0]!.action, {
+    type: "uri",
+    label: "查看資料",
+    uri,
+  });
+  await assert.rejects(
+    client.reply("token", "回答", [
+      { label: "查看", uri: "https://evil.invalid/" },
+    ]),
+    /invalid_reply/,
+  );
+});
 test("bounded service request refuses redirects, oversized metadata and non-HTTPS origins", async () => {
   assert.throws(() => new ServiceClient("http://localhost", {}));
   const client = new ServiceClient(

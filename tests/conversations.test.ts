@@ -304,7 +304,12 @@ test(
         [f.group, actor, f.store.now()],
       )
     ).rows[0].id;
-    const job = await f.conversations.start(
+    const conversation = new Conversations(f.store, f.search, {
+      query: async () => {
+        throw new Error("withdrawn request must never run");
+      },
+    });
+    const job = await conversation.start(
       f.group,
       actor,
       { query: "我的問題" },

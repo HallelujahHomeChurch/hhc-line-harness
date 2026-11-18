@@ -44,14 +44,25 @@ const toolCall = (name: string, args: unknown) =>
       status: "completed",
     },
   ]);
-const final = (selected: string[], proposal: string | null = null) =>
+const final = (
+  selected: string[],
+  proposal: string | null = null,
+  answer?: string,
+) =>
   reply([
     {
       type: "message",
       role: "assistant",
       status: "completed",
       content: [
-        { type: "output_text", text: JSON.stringify({ selected, proposal }) },
+        {
+          type: "output_text",
+          text: JSON.stringify({
+            selected,
+            proposal,
+            ...(answer === undefined ? {} : { answer }),
+          }),
+        },
       ],
     },
   ]);
@@ -130,8 +141,262 @@ async function fixture(
     agent: new HarnessAgent(store, search, edits, providers),
   };
 }
+for (const [query, answer] of [
+  ["你好", "你好！今天想聊什麼？"],
+  [
+    "幫我想三個帶領討論的方法",
+    "可以先提開放式問題、讓大家輪流分享，再整理共識。",
+  ],
+] as const)
+  test(
+    "conversational answer without retrieval: " + query,
+    { skip: !databaseEnabled },
+    async (t) => {
+      const f = await fixture(t, async () => final([], null, answer));
+      const result = await f.agent.query(
+        randomUUID(),
+        f.group,
+        actor,
+        { query },
+        async () => {},
+      );
+      assert.equal(f.queries(), 0);
+      assert.equal(result.answer, answer);
+      assert.equal(result.status, "success");
+      assert.deepEqual(result.items, []);
+    },
+  );
 test(
-  "one SDK Agent uses strict scoped tools and returns backend-owned evidence without model claims",
+  "group Agent preserves a 4000-code-unit question and rejects longer input before calling the model",
+  { skip: !databaseEnabled },
+  async (t) => {
+    const question = "請完整分析：" + "😀".repeat(1996) + "結尾";
+    assert.equal(question.length, 4000);
+    let received = "",
+      calls = 0;
+    const f = await fixture(t, async (request) => {
+      calls++;
+      received = JSON.parse(
+        String((request.input as { content: string }[])[0]?.content),
+      ).query;
+      return final([], null, "我收到完整問題，包括結尾。");
+    });
+    const result = await f.agent.query(
+      randomUUID(),
+      f.group,
+      actor,
+      { query: question },
+      async () => {},
+    );
+    assert.equal(received, question);
+    assert.equal(result.status, "success");
+    assert.equal(f.queries(), 0);
+    await assert.rejects(
+      f.agent.query(
+        randomUUID(),
+        f.group,
+        actor,
+        { query: question + "超" },
+        async () => {},
+      ),
+      /invalid_agent_query/,
+    );
+    assert.equal(calls, 1);
+  },
+);
+test(
+  "conversation history reaches the model without forcing retrieval",
+  { skip: !databaseEnabled },
+  async (t) => {
+    const history = [
+      { user: "想辦一場讀書會", assistant: "可以先選主題與三個討論問題。" },
+    ];
+    const answer = "那我們先從人物的選擇、動機與結果來設計三個問題。";
+    let received: unknown;
+    const f = await fixture(t, async (request) => {
+      received = JSON.parse(
+        String((request.input as { content: string }[])[0]?.content),
+      );
+      return final([], null, answer);
+    });
+    const result = await f.agent.query(
+      randomUUID(),
+      f.group,
+      actor,
+      { query: "就照剛才說的做" },
+      async () => {},
+      undefined,
+      undefined,
+      history,
+    );
+    assert.deepEqual((received as { history?: unknown }).history, history);
+    assert.equal(result.answer, answer);
+    assert.equal(f.queries(), 0);
+  },
+);
+test(
+  "a tool-grounded answer may omit unrelated candidates without losing its dependencies",
+  { skip: !databaseEnabled },
+  async (t) => {
+    let steps = 0;
+    const answer = "這份搜尋結果是敬拜輪值，並沒有提供你要的活動日期。";
+    const f = await fixture(t, async (request) => {
+      if (steps++ === 0)
+        return toolCall("search_resources", { query: "敬拜", kind: null });
+      assert.equal(toolResults(request).at(-1).items.length, 1);
+      return final([], null, answer);
+    });
+    const result = await f.agent.query(
+      randomUUID(),
+      f.group,
+      actor,
+      { query: "活動日期是什麼？" },
+      async () => {},
+    );
+    assert.equal(result.answer, answer);
+    assert.deepEqual(result.items, []);
+    assert.deepEqual(
+      result.dependencies?.map((s) => s.id),
+      [f.source],
+    );
+    assert.equal(f.queries(), 1);
+  },
+);
+test(
+  "model failure is explicit and never starts a fallback search",
+  { skip: !databaseEnabled },
+  async (t) => {
+    const f = await fixture(t, async () => {
+      throw new Error("fixture model failure");
+    });
+    const result = await f.agent.query(
+      randomUUID(),
+      f.group,
+      actor,
+      { query: "你好" },
+      async () => {},
+    );
+    assert.equal(f.queries(), 0);
+    assert.equal(result.status, "unavailable");
+    assert.match(result.answer!, /無法|暫時/);
+    assert.deepEqual(result.items, []);
+  },
+);
+test(
+  "more than fifty prior source dependencies reject before any provider call",
+  { skip: !databaseEnabled },
+  async (t) => {
+    let calls = 0;
+    const f = await fixture(t, async () => {
+      calls++;
+      return final([], null, "一般回答。");
+    });
+    await f.pool.query(
+      "INSERT INTO sources(group_id,message_id,author_id,kind,body,published_at,expires_at,state) SELECT $1,'bound-'||n,$2,'text','fixture',now(),now()+interval '90 days','ready' FROM generate_series(1,50) n",
+      [f.group, actor],
+    );
+    const dependencies = (
+      await f.pool.query(
+        'SELECT id,revision,description_revision AS "descriptionRevision",expires_at AS "expiresAt" FROM sources WHERE group_id=$1',
+        [f.group],
+      )
+    ).rows.map((row) => ({ ...row, expiresAt: row.expiresAt.toISOString() }));
+    await assert.rejects(
+      f.agent.query(
+        randomUUID(),
+        f.group,
+        actor,
+        { query: "繼續" },
+        async () => {},
+        undefined,
+        { status: "success", items: [], gaps: [], dependencies },
+      ),
+      /agent_evidence_limit/,
+    );
+    assert.equal(calls, 0);
+    assert.equal(f.queries(), 0);
+  },
+);
+test(
+  "prior answer dependencies remain fenced even when neither turn selects a source",
+  { skip: !databaseEnabled },
+  async (t) => {
+    let steps = 0;
+    const f = await fixture(t, async () => {
+      if (steps++ === 0)
+        return toolCall("search_resources", { query: "敬拜", kind: null });
+      return final([], null, "敬拜輪值資料的摘要。");
+    });
+    const previous = await f.agent.query(
+      randomUUID(),
+      f.group,
+      actor,
+      { query: "摘要敬拜輪值" },
+      async () => {},
+    );
+    const history = [{ user: "摘要敬拜輪值", assistant: previous.answer! }];
+    const next = await f.agent.query(
+      randomUUID(),
+      f.group,
+      actor,
+      { query: "再說明一下" },
+      async () => {},
+      undefined,
+      previous,
+      history,
+    );
+    assert.deepEqual(next.items, []);
+    assert.deepEqual(next.dependencies, previous.dependencies);
+    assert.equal(f.queries(), 1);
+    await f.pool.query(
+      "UPDATE sources SET description='changed',description_revision=description_revision+1 WHERE id=$1",
+      [f.source],
+    );
+    await assert.rejects(
+      f.agent.query(
+        randomUUID(),
+        f.group,
+        actor,
+        { query: "繼續" },
+        async () => {},
+        undefined,
+        next,
+        history,
+      ),
+      /agent_source_changed/,
+    );
+    assert.equal(steps, 3);
+  },
+);
+for (const [selected, proposal, answer] of [
+  [["r_" + "f".repeat(20)], null, "找到資料。"],
+  [[], "p_" + "f".repeat(20), "請確認草稿。"],
+  [[], null, "超".repeat(4001)],
+] as const)
+  test(
+    "invalid conversational output fails closed: " +
+      (selected.length ? "source" : proposal ? "proposal" : "length"),
+    { skip: !databaseEnabled },
+    async (t) => {
+      const f = await fixture(t, async () =>
+        final([...selected], proposal, answer),
+      );
+      const result = await f.agent.query(
+        randomUUID(),
+        f.group,
+        actor,
+        { query: "幫我處理" },
+        async () => {},
+      );
+      assert.equal(result.status, "unavailable");
+      assert.deepEqual(result.items, []);
+      assert.equal(result.proposal, undefined);
+      assert.notEqual(result.answer, answer);
+      assert.equal(f.queries(), 0);
+    },
+  );
+test(
+  "one SDK Agent uses strict scoped tools and returns a grounded answer with backend-owned evidence",
   { skip: !databaseEnabled },
   async (t) => {
     let steps = 0;
@@ -144,7 +409,11 @@ test(
       if (steps++ === 0)
         return toolCall("search_resources", { query: "敬拜", kind: null });
       const result = toolResults(request).at(-1);
-      return final([result.items[0].handle]);
+      return final(
+        [result.items[0].handle],
+        null,
+        "找到相關敬拜輪值資料，可以查看來源。",
+      );
     });
     const result = await f.agent.query(
       randomUUID(),
@@ -155,6 +424,8 @@ test(
     );
     assert.equal(result.items[0]?.id, f.source);
     assert.equal(result.status, "success");
+    assert.match(result.answer!, /敬拜輪值/);
+    assert.equal(f.queries(), 1);
     assert.equal(steps, 2);
     assert.equal(
       (await f.pool.query("SELECT count(*) n FROM agent_tools")).rows[0].n,
@@ -167,20 +438,24 @@ test(
   { skip: !databaseEnabled },
   async (t) => {
     let steps = 0;
+    let sourceHandle = "";
     const f = await fixture(t, async (request) => {
-      const initial = JSON.parse(
-        typeof request.input === "string"
-          ? request.input
-          : String((request.input as { content: string }[])[0]?.content),
-      );
       if (steps++ === 0)
+        return toolCall("search_resources", { query: "敬拜", kind: null });
+      const result = toolResults(request).at(-1);
+      if (steps === 2) {
+        sourceHandle = result.items[0].handle;
         return toolCall("propose_source_edit", {
-          handle: initial.candidates[0].handle,
+          handle: sourceHandle,
           kind: "description",
           text: "新的說明",
         });
-      const result = toolResults(request).at(-1);
-      return final([initial.candidates[0].handle], result.handle);
+      }
+      return final(
+        [sourceHandle],
+        result.handle,
+        "已準備說明草稿，請預覽並確認。",
+      );
     });
     const result = await f.agent.query(
       randomUUID(),
@@ -212,12 +487,13 @@ test(
     let steps = 0;
     let f: Awaited<ReturnType<typeof fixture>>;
     f = await fixture(t, async () => {
-      steps++;
+      if (steps++ === 0)
+        return toolCall("search_resources", { query: "敬拜", kind: null });
       await f.pool.query(
         "UPDATE sources SET state='revoked',revision=revision+1 WHERE id=$1",
         [f.source],
       );
-      return toolCall("search_resources", { query: "敬拜", kind: null });
+      return final([], null, "敬拜輪值資訊。");
     });
     await assert.rejects(
       f.agent.query(
@@ -229,7 +505,7 @@ test(
       ),
       /agent_source_changed/,
     );
-    assert.equal(steps, 1);
+    assert.equal(steps, 2);
   },
 );
 test(
@@ -250,7 +526,11 @@ test(
         secondary++;
         const result = toolResults(request).at(-1);
         assert.equal(result.items.length, 1);
-        return final([result.items[0].handle]);
+        return final(
+          [result.items[0].handle],
+          null,
+          "找到相關敬拜輪值資料，可以查看來源。",
+        );
       },
       async *getStreamedResponse() {
         throw new Error("unused");
@@ -266,7 +546,7 @@ test(
     assert.equal(result.items[0]?.id, f.source);
     assert.equal(primary, 2);
     assert.equal(secondary, 1);
-    assert.equal(f.queries(), 2);
+    assert.equal(f.queries(), 1);
     assert.equal(
       (await f.pool.query("SELECT count(*) n FROM agent_tools")).rows[0].n,
       "1",
@@ -341,17 +621,17 @@ test(
   { skip: !databaseEnabled },
   async (t) => {
     const { invalidate } = await import("../src/domain/lifecycle.ts");
-    const f = await fixture(t, async (request) => {
-      const initial = JSON.parse(
-        String((request.input as { content: string }[])[0]?.content),
-      );
-      return final([initial.candidates[0].handle]);
+    let steps = 0;
+    const f = await fixture(t, async () => {
+      if (steps++ === 0)
+        return toolCall("search_resources", { query: "敬拜", kind: null });
+      return final([], null, "這裡有敬拜輪值資料。");
     });
     const id = randomUUID();
     await f.agent.query(id, f.group, actor, { query: "敬拜" }, async () => {});
     assert.equal(
       (await f.pool.query("SELECT count(*) n FROM model_steps")).rows[0].n,
-      "1",
+      "2",
     );
     await f.agent.store.transaction((c) =>
       invalidate(c, f.source, f.agent.store.now(), "revoked"),
@@ -377,7 +657,11 @@ test(
       if (steps++ === 0)
         return toolCall("search_resources", { query: "敬拜", kind: null });
       const result = toolResults(request).at(-1);
-      return final([result.items[0].handle]);
+      return final(
+        [result.items[0].handle],
+        null,
+        "找到相關敬拜輪值資料，可以查看來源。",
+      );
     });
     const service = new HarnessAgent(
       f.agent.store,
@@ -408,17 +692,19 @@ test(
   { skip: !databaseEnabled },
   async (t) => {
     let steps = 0;
+    let sourceHandle = "";
     const f = await fixture(t, async (request) => {
-      const initial = JSON.parse(
-        String((request.input as { content: string }[])[0]?.content),
-      );
-      const newer = initial.candidates.find((c: { snippet: string }) =>
-        c.snippet.includes("這是修正版"),
-      );
-      const older = initial.candidates.find(
-        (c: { snippet: string }) => !c.snippet.includes("這是修正版"),
-      );
       if (steps++ === 0)
+        return toolCall("search_resources", { query: "敬拜", kind: null });
+      if (steps === 2) {
+        const candidates = toolResults(request).at(-1).items;
+        const newer = candidates.find((c: { snippet: string }) =>
+          c.snippet.includes("這是修正版"),
+        );
+        const older = candidates.find(
+          (c: { snippet: string }) => !c.snippet.includes("這是修正版"),
+        );
+        sourceHandle = older.handle;
         return toolCall("propose_version_relation", {
           source: older.handle,
           related: newer.handle,
@@ -426,7 +712,8 @@ test(
           quote: "這是修正版敬拜輪值，取代舊版安排",
           confidence: 0.8,
         });
-      return final([older.handle]);
+      }
+      return final([sourceHandle], null, "找到候選版本關係，尚未確認。");
     });
     await f.pool.query(
       "INSERT INTO sources(group_id,message_id,author_id,kind,body,published_at,expires_at,state) VALUES($1,'newer',$2,'text','這是修正版敬拜輪值，取代舊版安排',now(),now()+interval '90 days','ready')",

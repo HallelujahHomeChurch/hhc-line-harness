@@ -4,6 +4,7 @@ const group = "11111111-1111-4111-8111-111111111111",
   job = "22222222-2222-4222-8222-222222222222",
   source = "33333333-3333-4333-8333-333333333333";
 let downloadable = false,
+  conversational = false,
   forbidden = false,
   proposal = false,
   previews = 0,
@@ -39,6 +40,9 @@ const app = createServer({
           state: "ready",
           result: {
             status: "success",
+            ...(conversational
+              ? { answer: "<script>不是程式碼</script>這是完整回答。" }
+              : {}),
             ...(proposal
               ? { proposal: { sourceId: source, kind: "delete" as const } }
               : {}),
@@ -79,6 +83,7 @@ test.afterAll(async () => {
 });
 test.beforeEach(async ({ page }) => {
   downloadable = false;
+  conversational = false;
   forbidden = false;
   proposal = false;
   previews = 0;
@@ -97,6 +102,18 @@ test.beforeEach(async ({ page }) => {
   await expect(
     page.getByRole("button", { name: "搜尋", exact: true }),
   ).toBeEnabled();
+});
+test("saved conversational answers render as text in the optional resource page", async ({
+  page,
+}) => {
+  conversational = true;
+  await page.goto(
+    `${origin}/api/line/harness/app?group=${group}&result=${job}`,
+  );
+  await expect(page.getByRole("status")).toHaveText(
+    "<script>不是程式碼</script>這是完整回答。",
+  );
+  await expect(page.locator("#status script")).toHaveCount(0);
 });
 test("mobile search renders untrusted names as text and clears results when membership is denied", async ({
   page,

@@ -1,3 +1,4 @@
+import type { ReplyAction } from "../src/providers/line.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { database, databaseEnabled } from "./database.ts";
@@ -134,7 +135,7 @@ test(
     const { Interactions } = await import("../src/domain/interactions.ts");
     const replies: {
       text: string;
-      actions?: { label: string; data: string }[];
+      actions?: ReplyAction[];
     }[] = [];
     const interactions = new Interactions(
       f.queries.store,

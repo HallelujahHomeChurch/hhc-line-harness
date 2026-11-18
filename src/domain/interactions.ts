@@ -34,6 +34,7 @@ interface Interaction {
   payload_ciphertext: string | null;
   delivery_id: string | null;
   fence: string;
+  search_result_id: string | null;
 }
 export class Interactions {
   readonly store: Store;
@@ -82,7 +83,9 @@ export class Interactions {
     } else if (
       event.scope === "group" &&
       event.message?.mentionsBot &&
-      /(啟用|設定|恢復)/.test(event.message.text ?? "")
+      /^(?:@\S+\s+)?(?:啟用|設定|恢復)[。！!]?\s*$/.test(
+        event.message.text ?? "",
+      )
     ) {
       kind = "bootstrap";
     } else if (
@@ -129,17 +132,15 @@ export class Interactions {
       event.message?.mentionsBot &&
       event.message.text
     ) {
-      kind = /(?:重設對話|重置對話)/.test(event.message.text)
+      kind = /^(?:@\S+\s+)?(?:重設對話|重置對話)\s*$/.test(event.message.text)
         ? "conversation-reset"
-        : /查看(?:查詢)?結果/.test(event.message.text)
+        : /^(?:@\S+\s+)?查看(?:查詢)?結果\s*$/.test(event.message.text)
           ? "search-list"
           : "search";
       payload = {
         messageId: event.message.id,
-        useAgent: !/(?:搜尋|查詢)/.test(event.message.text),
-        query: event.message.text
-          .replace(/^.*?(?:搜尋|查詢)\s*/, "")
-          .slice(0, 200),
+        useAgent: true,
+        query: event.message.text,
       };
     } else if (
       event.scope === "group" &&
@@ -232,9 +233,12 @@ export class Interactions {
       );
       const row = (
         await c.query<Interaction>(
-          `SELECT i.* FROM interactions i JOIN runtime_state r ON r.mode='open' AND r.generation=i.runtime_generation
-    WHERE i.channel_id=$1 AND i.state='queued' AND NOT EXISTS(SELECT 1 FROM interactions older WHERE older.channel_id=i.channel_id AND older.scope_id=i.scope_id AND older.actor_id=i.actor_id AND older.sequence<i.sequence AND older.state IN ('queued','running')) ORDER BY i.sequence FOR UPDATE OF i SKIP LOCKED LIMIT 1`,
-          [this.store.channelId],
+          `SELECT i.*,d.search_result_id FROM interactions i JOIN runtime_state r ON r.mode='open' AND r.generation=i.runtime_generation
+    LEFT JOIN deliveries d ON d.id=i.delivery_id LEFT JOIN search_jobs j ON j.id=d.search_result_id
+    WHERE i.channel_id=$1 AND i.state='queued'
+    AND (i.kind<>'search' OR d.search_result_id IS NULL OR j.state NOT IN ('queued','running') OR d.received_at <= $2::timestamptz - interval '20 seconds' OR d.expires_at <= $2::timestamptz + interval '5 seconds')
+    AND NOT EXISTS(SELECT 1 FROM interactions older WHERE older.channel_id=i.channel_id AND older.scope_id=i.scope_id AND older.actor_id=i.actor_id AND older.sequence<i.sequence AND older.state IN ('queued','running')) ORDER BY i.sequence FOR UPDATE OF i SKIP LOCKED LIMIT 1`,
+          [this.store.channelId, now],
         )
       ).rows[0];
       if (!row) return;
@@ -355,14 +359,15 @@ export class Interactions {
         if (row.kind === "conversation-reset") {
           await conversations.reset(group.id, row.actor_id, row);
           text = "已重設你的本群組對話；群組原始資料仍保留。";
-        } else if (row.kind === "search") {
+        } else if (row.kind === "search" && !row.search_result_id) {
+          if (!row.delivery_id) throw new Error("reply_expired");
           const excluded = (
             await this.store.pool.query(
               "SELECT id FROM sources WHERE group_id=$1 AND message_id=$2",
               [group.id, payload.messageId],
             )
           ).rows[0]?.id;
-          const job = await conversations.start(
+          await conversations.start(
             group.id,
             row.actor_id,
             { query: payload.query! },
@@ -370,10 +375,7 @@ export class Interactions {
             excluded,
             payload.useAgent,
           );
-          text = "已受理查詢。請稍後點選查看結果；不會另行推播。";
-          if (this.ports.liffId)
-            text += `\n搜尋與下載：https://liff.line.me/${this.ports.liffId}?group=${group.id}&result=${job.id}`;
-          actions = [{ label: "查看查詢結果", data: `search:get:${job.id}` }];
+          return true;
         } else if (row.kind === "search-list") {
           const jobs = await conversations.candidates(
             group.id,
@@ -405,41 +407,49 @@ export class Interactions {
               data: `search:list:${jobs.at(-1)!.id}`,
             });
         } else {
+          const resultId =
+            row.kind === "search" ? row.search_result_id! : payload.id!;
           const status = await conversations.read(
-            payload.id!,
+            resultId,
             row.actor_id,
             group.id,
             row,
           );
           if (status.result) {
             text =
-              status.result.items
+              status.result.answer ??
+              (status.result.items
                 .map(
                   (i, n) =>
-                    `${n + 1}. ${i.name.slice(0, 120)}\n作者：${i.authorId ?? "未知"}；發布：${i.publishedAt}\n${i.snippet.slice(0, 200)}\n${i.gaps.length ? "適用期間與版本仍需依原群組公告確認。" : ""}`,
+                    `${n + 1}. ${i.name.slice(0, 120)}\n${i.snippet.slice(0, 200)}`,
                 )
                 .join("\n\n") ||
-              (status.result.status === "not_found"
-                ? "未找到符合的資料。"
-                : status.result.status === "unavailable"
-                  ? "文字搜尋暫時無法完成，請稍後重試。"
-                  : "索引尚未完成，請稍後重試。");
+                (status.result.status === "not_found"
+                  ? "未找到符合的資料。"
+                  : status.result.status === "unavailable"
+                    ? "文字搜尋暫時無法完成，請稍後重試。"
+                    : "索引尚未完成，請稍後重試。"));
           } else
             text =
               status.state === "failed"
                 ? "查詢暫時無法完成，請重新提出查詢。"
-                : "查詢處理中，請稍後再查看。";
-          if (this.ports.liffId)
-            text += `\n搜尋與下載：https://liff.line.me/${this.ports.liffId}?group=${group.id}&result=${payload.id}`;
-          if (status.state !== "failed")
-            actions = [{ label: "再次查看", data: `search:get:${payload.id}` }];
+                : "還在處理，稍後可點下方查看回答。";
+          if (!status.result && status.state !== "failed")
+            actions = [{ label: "查看回答", data: `search:get:${resultId}` }];
+          if (status.result?.items.length && this.ports.liffId)
+            actions = [
+              {
+                label: "查看資料",
+                uri: `https://liff.line.me/${this.ports.liffId}?group=${group.id}&result=${resultId}`,
+              },
+            ];
           if (status.result?.gaps.includes("agent_unavailable_basic_search"))
             text += "\n智能查詢暫時無法完成，目前顯示關鍵字搜尋結果。";
           if (status.result?.proposal) {
             text += "\n有一項變更草稿；尚未修改資料，請先預覽。";
-            actions?.push({
+            (actions ??= []).push({
               label: "預覽變更草稿",
-              data: `agent:preview:${payload.id}`,
+              data: `agent:preview:${resultId}`,
             });
           }
         }

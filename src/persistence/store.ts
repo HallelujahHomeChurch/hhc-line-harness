@@ -42,16 +42,39 @@ export class Store {
     operation: (client: PoolClient) => Promise<T>,
   ): Promise<T> {
     const client = await this.pool.connect();
+    let connectionError: Error | undefined;
+    let discard = false;
+    // Pool error handlers cover idle clients, not clients checked out here.
+    const onError = (error: Error) => {
+      connectionError = error;
+      discard = true;
+    };
+    client.on("error", onError);
     try {
       await client.query("BEGIN");
       const result = await operation(client);
+      if (connectionError) throw connectionError;
       await client.query("COMMIT");
       return result;
     } catch (error) {
-      await client.query("ROLLBACK");
+      if (!connectionError) {
+        try {
+          await client.query("ROLLBACK");
+        } catch (rollbackError) {
+          // A client-side timeout does not cancel the wire query. Returning
+          // this client to the pool would repeatedly reuse the stuck socket.
+          discard = true;
+          throw new AggregateError(
+            [error, rollbackError],
+            "transaction_rollback_failed",
+            { cause: error },
+          );
+        }
+      }
       throw error;
     } finally {
-      client.release();
+      client.release(discard);
+      client.removeListener("error", onError);
     }
   }
   async requireInteraction(

@@ -34,7 +34,16 @@ export interface SearchItem {
 export type SourceProposal =
   | { sourceId: string; kind: "delete" }
   | { sourceId: string; kind: "description"; text: string };
+export interface ConversationTurn {
+  user: string;
+  assistant: string;
+}
 export interface SearchResult {
+  answer?: string;
+  dependencies?: Pick<
+    SearchItem,
+    "id" | "revision" | "descriptionRevision" | "expiresAt"
+  >[];
   proposal?: SourceProposal;
   status:
     | "success"
